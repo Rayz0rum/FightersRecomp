@@ -17,6 +17,10 @@ A native Windows recompilation of the Xbox 360 XBLA version of <i>Sonic the Figh
 The project brings the XBLA release to modern PCs without requiring Xbox 360 emulation or Xenia. It includes native Windows execution, configurable resolution and frame rate, keyboard and controller support, an integrated installer, additional settings, save support, and other improvements designed to make the game easy to install and play on modern systems.
 
 > [!IMPORTANT]
+> **rexruntime.dll - It is a false positive and may be detected by antiviruses. The file was taken from the original RexGlue‑SDK repository and can be replaced with the original one from their repository.**
+>
+
+> [!IMPORTANT]
 > **Sonic the Fighters Recompiled does not distribute the original game.**
 >
 > You must provide the required game data from your own legally acquired copy of *Sonic the Fighters*. The installer verifies the supplied game file before installation.
