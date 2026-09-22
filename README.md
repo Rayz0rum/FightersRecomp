@@ -142,6 +142,10 @@ This is an early release, so there are still some problems to fix.
 
 ## Roadmap
 
+At this moment I'm working on
+<b>new installer, new in-game windows</b>
+progress: ■■■■■□□□□□ 50%
+
 Things I would like to work on in future versions:
 
 - Russian localization
