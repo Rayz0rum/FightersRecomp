@@ -1,6 +1,6 @@
 <p align="center">
 
-&#x20; <img src="assets/logo.png" width="600" alt="Sonic the Fighters Recompiled"/>
+&#x20; <img src="assets/logo.png" align="center" width="600" alt="Sonic the Fighters Recompiled"/>
 
 </p>
 
