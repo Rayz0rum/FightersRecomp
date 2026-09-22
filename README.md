@@ -216,35 +216,20 @@ Keyboard controls are fully remappable from within the game.
 The default bindings are:
 
 | Xbox 360 Input | Keyboard / Mouse |
-
 | --- | --- |
-
 | **Y** | **X** |
-
 | **B** | **Right Mouse Button** |
-
 | **X** | **Z** |
-
 | **A** | **Left Mouse Button** |
-
 | **LB** | **Q** |
-
 | **LT** | **C** |
-
 | **RB** | **E** |
-
 | **RT** | **V** |
-
 | **START** | **Enter / Return** |
-
 | **BACK** | **Backspace** |
-
 | **Move Up** | **W** |
-
 | **Move Down** | **S** |
-
 | **Move Left** | **A** |
-
 | **Move Right** | **D** |
 
 Press **F6** to restore the default keyboard configuration.
@@ -497,9 +482,9 @@ Responsible for the Sonic the Fighters-specific recompilation integration and re
 
 ## Special Thanks
 
-- **Unleashed Recompiled** — for the inspiration and motivation behind this project.
-- **XenonRecomp** — for the tools and technical groundwork that helped during development.
-- **RexGL / RexGlue** — for providing the convenient recompilation/runtime framework used as the foundation of the final release.
+- **[Unleashed Recompiled](https://github.com/hedge-dev/UnleashedRecomp)** — for the inspiration and motivation behind this project.
+- **[XenonRecomp](https://github.com/hedge-dev/XenonRecomp)** — for the tools and technical groundwork that helped during development.
+- **[RexGL / RexGlue](https://github.com/rexglue/rexglue-sdk)** — for providing the convenient recompilation/runtime framework used as the foundation of the final release.
 
 ---
 
