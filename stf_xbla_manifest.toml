@@ -1,0 +1,31 @@
+[project]
+name = "stf_xbla"
+sdk_version = "0.10.0"
+game_root = "_unpacked"
+
+[entrypoint]
+file_path = "_unpacked/default.xex"
+out_directory_path = "generated/default"
+includes = []
+
+[entrypoint.functions]
+"0x82130290" = { name = "sub_82130290" }
+"0x82444A58" = { name = "sub_82444A58" }
+"0x82444A70" = { name = "sub_82444A70" }
+"0x82444A88" = { name = "sub_82444A88" }
+"0x82444AA0" = { name = "sub_82444AA0" }
+"0x82444AB8" = { name = "sub_82444AB8" }
+"0x822DDD90" = { name = "sub_822DDD90" }
+"0x821766E0" = { name = "sub_821766E0" }
+"0x823B4110" = { name = "sub_823B4110" }
+"0x823B7B08" = { name = "sub_823B7B08" }
+"0x823AEEB0" = { name = "sub_823AEEB0" }
+"0x82130258" = { name = "sub_82130258" }
+"0x82130270" = { name = "sub_82130270" }
+"0x82130260" = { name = "sub_82130260" }
+"0x82186D88" = { name = "sub_82186D88" }
+"0x82130280" = { name = "sub_82130280" }
+"0x82130268" = { name = "sub_82130268" }
+"0x82130278" = { name = "sub_82130278" }
+"0x823B5C00" = { name = "sub_823B5C00" }
+"0x823AEE98" = { name = "sub_823AEE98" }

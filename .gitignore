@@ -1,0 +1,10 @@
+/out/
+/_unpacked/
+/generated/default/
+**/.vs/
+**/bin/
+**/obj/
+/thirdparty/rexglue-sdk/out/
+/PublicRelease/install.exe
+/PublicRelease/rexruntime.dll
+/PublicRelease/rexgpu-xenos.dll

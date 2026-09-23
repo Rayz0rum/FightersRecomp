@@ -1,0 +1,20 @@
+# Default controls for a new install.
+# Let the keyboard and mouse work as a gamepad.
+mnk_mode = true
+mnk_mouse = false
+input_backend = "sdl"
+
+keybind_lstick_up = "W"
+keybind_lstick_down = "S"
+keybind_lstick_left = "A"
+keybind_lstick_right = "D"
+keybind_a = "Space"
+keybind_b = "C"
+keybind_x = "Z"
+keybind_y = "X"
+keybind_start = "Return"
+keybind_back = "Backspace"
+keybind_left_shoulder = "Q"
+keybind_right_shoulder = "E"
+keybind_left_trigger = "Shift+Shift"
+keybind_right_trigger = "R"

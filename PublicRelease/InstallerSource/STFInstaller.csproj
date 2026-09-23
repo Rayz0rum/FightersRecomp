@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>install</AssemblyName>
+    <RootNamespace>STFInstaller</RootNamespace>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <ApplicationIcon>..\..\assets\installer.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\Background\Sonic.png" LogicalName="Sonic.png" />
+    <EmbeddedResource Include="..\Background\tails.png" LogicalName="tails.png" />
+    <EmbeddedResource Include="..\Background\Knuckles.png" LogicalName="Knuckles.png" />
+    <EmbeddedResource Include="..\Background\super sonic.png" LogicalName="super sonic.png" />
+    <EmbeddedResource Include="..\Background\eggman.png" LogicalName="eggman.png" />
+    <EmbeddedResource Include="..\..\out\release-package\stfrecompiled.exe" LogicalName="stfrecompiled.exe" />
+    <EmbeddedResource Include="..\rexruntime.dll" LogicalName="rexruntime.dll" />
+    <EmbeddedResource Include="..\rexgpu-xenos.dll" LogicalName="rexgpu-xenos.dll" />
+    <EmbeddedResource Include="Assets\stf_xbla.toml" LogicalName="stf_xbla.toml" />
+  </ItemGroup>
+</Project>
