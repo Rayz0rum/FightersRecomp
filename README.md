@@ -18,14 +18,10 @@ Native Windows recompilation of the Xbox 360 XBLA version of *Sonic the Fighters
 
 The project uses RexGlue / RexGL to run the game natively on PC without Xenia or a full Xbox 360 emulation environment.
 
-I started this project because I wanted a proper PC version of the XBLA release. Development originally started with XenonRecomp, but I later moved to RexGlue / RexGL, which became the foundation of the current version.
-
 The original game is **not included**. You need your own legally acquired Xbox 360 copy of *Sonic the Fighters*.
 
 > [!IMPORTANT]
-> `rexruntime.dll` may be detected by some antivirus software. This is a false positive. The DLL comes from the original RexGlue SDK and can be replaced with the version from its repository.
-> AI used in images of installer, some description information. 
-
+> AI used in some description information and sometimes in code. 
 
 ---
 
@@ -37,13 +33,13 @@ The original game is **not included**. You need your own legally acquired Xbox 3
 - Keyboard remapping
 - Save support
 - Achievements
-- 720p, 1080p and 1440p output
-- 30, 60 and 120 FPS options
+- HD, FHD, 2K, 4K outputs
+- 30, 60, 120, 144 FPS options
 - Windowed and fullscreen modes
 - VSync option
 - Integrated installer
 - English and Russian installer languages
-- Original menus, music, sound effects and cinematics
+- Widescreen mode (full screen mode in Original settings) without specific aspect ratio
 
 The game currently uses the original Xbox 360 button prompts.
 
@@ -55,12 +51,15 @@ A Dual Joy-Con configuration has also been tested successfully.
 
 ### Operating system
 
-- Windows 10
-- Windows 11
+- Windows 7 and newer
 
-Exact minimum hardware requirements have not been established yet.
+### Hardware
+- Exact minimum hardware requirements have not been established yet.
+
 
 Linux is not supported in the current release.
+MacOS can launch this game by installer in CrossOver using D3DMetal in graphics section (with stutters).
+(Tested on MacBook Air M1 256GB ROM / 8GB RAM)
 
 ---
 
@@ -87,6 +86,24 @@ The installer will launch `stfrecompiled.exe` when installation is finished.
 After that, `install.exe` can also be used to uninstall or reinstall the game.
 
 Modified or unsupported game files will fail verification.
+
+---
+
+## Build Info
+
+Make sure you have installed: VS 2022 with C++ Build Tools, WinSDK, Clang, CMake, Ninja, .net sdk 10. ReXGlue included.
+
+To compile all project:
+
+1. Open PowerShell in the project root.
+2. Compile the game:
+```powershell
+.\tools\build-game.cmd
+```
+3. Compile the installer:
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\PublicRelease\build-installer.ps1
+```
 
 ---
 
@@ -132,8 +149,6 @@ Back up this folder if you want to keep your saves before removing the game.
 This is an early release, so there are still some problems to fix.
 
 - The recompilation settings menu may sometimes be too small for its contents.
-- Opening the **Achievements** menu can freeze the game. Achievement functionality itself is present.
-- Recompilation-specific settings are currently reset after restarting the game.
 - Local multiplayer input is present but has not been fully tested.
 - Original Xbox Live functionality is not considered supported.
 - Mod compatibility has not been tested yet.
@@ -141,10 +156,6 @@ This is an early release, so there are still some problems to fix.
 ---
 
 ## Roadmap
-
-At this moment I'm working on
-<b>new installer, new in-game windows</b>
-progress: ■■■■■□□□□□ 50%
 
 Things I would like to work on in future versions:
 
@@ -171,8 +182,6 @@ RexGlue / RexGL provides the underlying recompilation and runtime technology. Th
 This included work on platform and runtime integration, input, keyboard remapping, saves, additional settings, compatibility fixes, debugging, testing, the installer and release packaging.
 
 Development originally started with **XenonRecomp** before moving to RexGlue / RexGL.
-
-This is not an emulator package and does not require Xenia to run.
 
 ---
 
