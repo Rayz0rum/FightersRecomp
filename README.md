@@ -6,7 +6,7 @@
 
 Native Windows recompilation of the Xbox 360 XBLA version of *Sonic the Fighters*.
 
-**Current version: v0.1.1**
+**Current version: [v0.1.1](https://github.com/SparkosTheWolf/FightersRecomp/releases/tag/v0.1.1)**
 
 </div>
 
