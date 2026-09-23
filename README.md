@@ -95,12 +95,14 @@ Make sure you have installed: VS 2022 with C++ Build Tools, WinSDK, Clang, CMake
 
 To compile all project:
 
-1. Open PowerShell in the project root.
-2. Compile the game:
+1. Make folder in project root `_unpacked` and add unpacked game into this folder (unpacked game you can get after succesfull installer of Sonic the Fighters Recompiled.
+2. Open PowerShell in the project root. 
+3. Compile the game:
 ```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\prepare-game.ps1
 .\tools\build-game.cmd
 ```
-3. Compile the installer:
+4. Compile the installer:
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\PublicRelease\build-installer.ps1
 ```
