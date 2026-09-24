@@ -29,3 +29,97 @@ includes = []
 "0x82130278" = { name = "sub_82130278" }
 "0x823B5C00" = { name = "sub_823B5C00" }
 "0x823AEE98" = { name = "sub_823AEE98" }
+# Functions only reachable through vtables that sit in runs of adjacent small
+# functions (mostly this-adjusting thunks: addi r3,r3,-N; b target). Analysis
+# merged each run into its first entry, so calling any of these crashed with
+# "Call to invalid or unregistered function" (0x823B40D8 in shipped builds).
+# The SDK gap-fill pass now finds them too; listing them keeps older rexglue
+# builds working.
+"0x82130288" = { name = "sub_82130288" }
+"0x821AF458" = { name = "sub_821AF458" }
+"0x822A8240" = { name = "sub_822A8240" }
+"0x82399058" = { name = "sub_82399058" }
+"0x823ACA78" = { name = "sub_823ACA78" }
+"0x823AEEA8" = { name = "sub_823AEEA8" }
+"0x823B40B0" = { name = "sub_823B40B0" }
+"0x823B40B8" = { name = "sub_823B40B8" }
+"0x823B40C0" = { name = "sub_823B40C0" }
+"0x823B40C8" = { name = "sub_823B40C8" }
+"0x823B40D0" = { name = "sub_823B40D0" }
+"0x823B40D8" = { name = "sub_823B40D8" }
+"0x823B40E8" = { name = "sub_823B40E8" }
+"0x823B40F0" = { name = "sub_823B40F0" }
+"0x823B40F8" = { name = "sub_823B40F8" }
+"0x823B4100" = { name = "sub_823B4100" }
+"0x823B4108" = { name = "sub_823B4108" }
+"0x823B5490" = { name = "sub_823B5490" }
+"0x823B5498" = { name = "sub_823B5498" }
+"0x823B54A0" = { name = "sub_823B54A0" }
+"0x823B54A8" = { name = "sub_823B54A8" }
+"0x823B68C0" = { name = "sub_823B68C0" }
+"0x823B7618" = { name = "sub_823B7618" }
+"0x823BA598" = { name = "sub_823BA598" }
+"0x823C85A8" = { name = "sub_823C85A8" }
+"0x823C85B0" = { name = "sub_823C85B0" }
+"0x823C9E40" = { name = "sub_823C9E40" }
+"0x823C9E48" = { name = "sub_823C9E48" }
+"0x823F6B80" = { name = "sub_823F6B80" }
+"0x82416494" = { name = "sub_82416494" }
+"0x82441CC8" = { name = "sub_82441CC8" }
+"0x82453A50" = { name = "sub_82453A50" }
+"0x8245DD18" = { name = "sub_8245DD18" }
+"0x824620E0" = { name = "sub_824620E0" }
+"0x82465858" = { name = "sub_82465858" }
+"0x82498C38" = { name = "sub_82498C38" }
+
+# Game hooks, implemented in src/main.cpp. They are anchored to guest addresses
+# so they survive changes to how the generated sources are laid out.
+
+# Help & Options scene, after its row labels are initialized: swap in the
+# Recompilation Settings, Remap Inputs and Achievements pages, and resize the
+# panel when the row count changes.
+[[entrypoint.midasm_hook]]
+name = "StfrPrepareHelpOptionsHook"
+address = 0x8211667C
+registers = ["r29", "r1", "r13"]
+
+# Help & Options scene setup opens its panel for 5 rows (bl 0x82126948 with
+# type 14). The port lists 7, so open the matching taller panel.
+[[entrypoint.midasm_hook]]
+name = "StfrHelpOptionsPanelTypeHook"
+address = 0x82114B54
+registers = ["r4"]
+
+# Help & Options title string id (li r3,418).
+[[entrypoint.midasm_hook]]
+name = "StfrHelpOptionsTitleHook"
+address = 0x821166FC
+registers = ["r3"]
+after_instruction = true
+
+# Original Settings scene: follow the Screen Size setting.
+[[entrypoint.midasm_hook]]
+name = "StfrPrepareNativeSettingsHook"
+address = 0x82117480
+registers = ["r27"]
+
+# Main menu scene update: remember the object to route the Achievements entry.
+[[entrypoint.midasm_hook]]
+name = "StfrCaptureMainMenuHook"
+address = 0x82148134
+registers = ["r29"]
+
+# String table lookup: serve the port's own strings.
+[[entrypoint.midasm_hook]]
+name = "StfrResolveStringHook"
+address = 0x821817E0
+registers = ["r3"]
+return_on_true = true
+
+# Pause menu "Achievements" normally opens the Xbox Guide (bl 0x821A8538).
+# Show the port's achievement list in the pause menu instead.
+[[entrypoint.midasm_hook]]
+name = "StfrOpenPauseAchievementsHook"
+address = 0x8218C674
+registers = ["r3"]
+jump_address = 0x8218C67C

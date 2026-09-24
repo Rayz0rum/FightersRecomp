@@ -754,6 +754,7 @@ VulkanPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_su
   const VkDevice device = vulkan_device_->device();
 
   VkFormat new_swapchain_format;
+  paint_context_.swapchain_vsync = REXCVAR_GET(vsync);
 
   // ConnectOrReconnectToSurfaceFromUIThread may be called only for the
   // ui::Surface of the current swapchain or when the old swapchain and
@@ -1381,7 +1382,15 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
   // interfering with GPU command processing, and also to allow tearing so
   // variable refresh rate may be used where it's available.
   // Note: If the priorities here are changes, update the cvar descriptions.
-  if (REXCVAR_GET(vulkan_allow_present_mode_immediate) &&
+  // The vsync cvar asks for no tearing: mailbox (newest frame at the next
+  // vertical blank, never blocks), falling through to FIFO below.
+  if (REXCVAR_GET(vsync) && REXCVAR_GET(vulkan_allow_present_mode_mailbox) &&
+      std::find(present_modes.cbegin(), present_modes.cend(), VK_PRESENT_MODE_MAILBOX_KHR) !=
+          present_modes.cend()) {
+    swapchain_create_info.presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+  } else if (REXCVAR_GET(vsync)) {
+    swapchain_create_info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+  } else if (REXCVAR_GET(vulkan_allow_present_mode_immediate) &&
       std::find(present_modes.cbegin(), present_modes.cend(), VK_PRESENT_MODE_IMMEDIATE_KHR) !=
           present_modes.cend()) {
     // Allowing tearing to reduce latency, and possibly variable refresh rate
@@ -1529,6 +1538,11 @@ bool VulkanPresenter::GuestOutputImage::Initialize() {
 }
 
 Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_drawers) {
+  // The present mode follows the vsync cvar, so a change needs a new swapchain.
+  if (paint_context_.swapchain_vsync != REXCVAR_GET(vsync)) {
+    return PaintResult::kNotPresentedConnectionOutdated;
+  }
+
   // Begin the submission in place of the one not currently potentially used on
   // the GPU.
   uint64_t current_paint_submission_index =

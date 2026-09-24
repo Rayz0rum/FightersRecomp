@@ -26,6 +26,13 @@
 #include <ffx_api/ffx_upscale.h>
 #endif
 
+// Only affects the host swap chain. The guest's own frame clock (and therefore
+// game speed) is the vblank interrupt in GraphicsSystem, which is independent.
+REXCVAR_DEFINE_BOOL(vsync, true, "UI/Presenter",
+                    "Wait for the display's vertical blank when presenting. Off presents "
+                    "immediately, allowing tearing and variable refresh rate.")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 REXCVAR_DEFINE_BOOL(host_present_from_non_ui_thread, true, "UI/Presenter",
                     "Allow presentation from non-UI thread");
 

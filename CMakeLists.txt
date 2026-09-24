@@ -29,5 +29,5 @@ if(REXSDK_DIR)
 endif()
 
 if(WIN32)
-    target_link_libraries(stf_xbla PRIVATE d3d12 dxgi shell32)
+    target_link_libraries(stf_xbla PRIVATE d3d12 dxgi shell32 winmm)
 endif()

@@ -13,10 +13,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <utility>
 
 #include <rex/cvar.h>
@@ -30,6 +32,16 @@
 #include <rex/ui/graphics_provider.h>
 #include <rex/ui/window.h>
 #include <rex/ui/windowed_app_context.h>
+
+#if REX_PLATFORM_WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU", "Swap post effect: none, fxaa, fxaa_extreme")
     .allowed({"none", "fxaa", "fxaa_extreme"})
@@ -56,13 +68,64 @@ rex::graphics::CommandProcessor::SwapPostEffect ParseSwapPostEffect(
   }
   return rex::graphics::CommandProcessor::SwapPostEffect::kNone;
 }
+
+// Sleeps with sub-millisecond precision. Plain Sleep() rounds up to the system
+// timer period (15.6 ms by default), far too coarse for a 16.7 ms vblank.
+class PreciseSleeper {
+ public:
+  PreciseSleeper() {
+#if REX_PLATFORM_WIN32
+#ifdef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+    timer_ = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                    TIMER_ALL_ACCESS);
+#endif
+    if (!timer_) {
+      // Pre-1803 Windows: precision follows timeBeginPeriod.
+      timer_ = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
+    }
+#endif
+  }
+  ~PreciseSleeper() {
+#if REX_PLATFORM_WIN32
+    if (timer_) {
+      CloseHandle(timer_);
+    }
+#endif
+  }
+  PreciseSleeper(const PreciseSleeper&) = delete;
+  PreciseSleeper& operator=(const PreciseSleeper&) = delete;
+
+  void SleepFor(std::chrono::microseconds duration) {
+    if (duration.count() <= 0) {
+      return;
+    }
+#if REX_PLATFORM_WIN32
+    if (timer_) {
+      LARGE_INTEGER due;
+      due.QuadPart = -int64_t(duration.count()) * 10;  // Relative, 100 ns units.
+      if (SetWaitableTimerEx(timer_, &due, 0, nullptr, nullptr, nullptr, 0)) {
+        WaitForSingleObject(timer_, INFINITE);
+        return;
+      }
+    }
+#endif
+    std::this_thread::sleep_for(duration);
+  }
+
+ private:
+#if REX_PLATFORM_WIN32
+  HANDLE timer_ = nullptr;
+#endif
+};
 }  // namespace
 
 namespace rex::graphics {
 
 // Nvidia Optimus/AMD PowerXpress support.
 // These exports force the process to trigger the discrete GPU in multi-GPU
-// systems.
+// systems. Drivers only look for them in the main executable, so the host app
+// must export them too; D3D12Provider additionally asks DXGI for the
+// high-performance adapter.
 // https://developer.download.nvidia.com/devzone/devcenter/gamegraphics/files/OptimusRenderingPolicies.pdf
 // https://stackoverflow.com/questions/17458803/amd-equivalent-to-nvoptimusenablement
 #if REX_PLATFORM_WIN32
@@ -146,7 +209,10 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
                                  reinterpret_cast<runtime::MMIOReadCallback>(ReadRegisterThunk),
                                  reinterpret_cast<runtime::MMIOWriteCallback>(WriteRegisterThunk));
 
-  // Guest vblank timer based on the configured guest video mode.
+  // Guest vblank timer based on the configured guest video mode. This interrupt
+  // is the title's frame clock: games that step their simulation once per frame
+  // run exactly as fast as it ticks, so it must stay at the video mode rate
+  // regardless of how (or whether) the host synchronizes presentation.
   vsync_worker_running_ = true;
   vsync_worker_thread_ = system::object_ref<system::XHostThread>(
       new system::XHostThread(kernel_state_, 128 * 1024, 0, [this]() {
@@ -157,16 +223,34 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
         uint64_t vsync_interval_ticks =
             std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
         uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);
+        PreciseSleeper sleeper;
         uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
         while (vsync_worker_running_) {
+          uint64_t interval_ticks = REXCVAR_GET(guest_vblank_uncapped) ? no_vsync_interval_ticks
+                                                                       : vsync_interval_ticks;
           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
-          uint64_t interval_ticks =
-              REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks;
+          // After a long stall (debugger, suspend, window drag) resume from now
+          // instead of firing a burst of catch-up vblanks, which would make the
+          // game fast-forward.
+          if (current_time - last_frame_time >= interval_ticks * 4) {
+            last_frame_time = current_time - interval_ticks;
+          }
           while (current_time - last_frame_time >= interval_ticks) {
             MarkVblank();
             last_frame_time += interval_ticks;
           }
-          rex::thread::Sleep(std::chrono::milliseconds(1));
+          // Wake up just before the next vblank is due, then let the loop above
+          // fire it. Guest ticks may run at a scaled rate relative to host time.
+          int64_t remaining_ticks = int64_t(last_frame_time + interval_ticks) -
+                                    int64_t(chrono::Clock::QueryGuestTickCount());
+          double host_ticks_per_second =
+              double(guest_tick_frequency) * std::max(chrono::Clock::guest_time_scalar(), 1e-6);
+          int64_t remaining_us = int64_t(double(remaining_ticks) * 1e6 / host_ticks_per_second);
+          if (remaining_us > 0 && remaining_us <= 1000000) {
+            sleeper.SleepFor(std::chrono::microseconds(remaining_us));
+          } else {
+            rex::thread::MaybeYield();
+          }
         }
         return 0;
       }));

@@ -108,9 +108,9 @@ macro(rexglue_setup_target target_name)
     rexglue_configure_target(${target_name} ${ARGN})
 endmacro()
 
-# The checked-in generated sources contain game-specific menu and input hooks.
-# Regenerating them from default.xex would discard those changes. Compile the
-# pinned sources as-is; edit them deliberately when changing guest behavior.
+# Codegen runs separately (tools/prepare-game.ps1) because it needs the game's
+# default.xex. Game hooks are declared in stf_xbla_manifest.toml, so the
+# generated sources are never edited by hand.
 add_custom_target(stf_xbla_codegen)
 
 # Include DLL module shared library targets if codegen has generated them

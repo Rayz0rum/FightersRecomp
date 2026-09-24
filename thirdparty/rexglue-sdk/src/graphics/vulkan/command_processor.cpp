@@ -2408,6 +2408,13 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
   uint32_t display_width = std::max(uint32_t(1), uint32_t(video_mode.display_width));
   uint32_t display_height = std::max(uint32_t(1), uint32_t(video_mode.display_height));
 
+  // Frame rate cap: the guest still renders and advances every frame, only the
+  // hand-off to the host is skipped.
+  if (!ShouldPresentGuestSwap()) {
+    EndSubmission(true);
+    return;
+  }
+
   presenter->RefreshGuestOutput(
       guest_output_width, guest_output_height, display_width, display_height,
       [this, guest_output_width, guest_output_height, frontbuffer_format, swap_texture_view,

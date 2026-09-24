@@ -1985,6 +1985,13 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
   uint32_t display_width = std::max(uint32_t(1), uint32_t(video_mode.display_width));
   uint32_t display_height = std::max(uint32_t(1), uint32_t(video_mode.display_height));
 
+  // Frame rate cap: the guest still renders and advances every frame, only the
+  // hand-off to the host is skipped. The frame must still end, as below.
+  if (!ShouldPresentGuestSwap()) {
+    EndSubmission(true);
+    return;
+  }
+
   presenter->RefreshGuestOutput(
       guest_output_width, guest_output_height, display_width, display_height,
       [this, &swap_texture_srv_desc, frontbuffer_format, swap_texture_resource, guest_output_width,

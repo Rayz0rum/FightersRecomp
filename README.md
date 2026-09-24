@@ -37,9 +37,10 @@ The original game is **not included**. You need your own legally acquired Xbox 3
 - Save support
 - Achievements
 - HD, FHD, 2K, 4K outputs
-- 30, 60, 120, 144 FPS options
+- 30 and 60 FPS options (the game always runs at its native speed)
 - Windowed and fullscreen modes
-- VSync option
+- VSync option (tear-free presentation; does not affect game speed)
+- Keyboard can be Player 2 for local matches against a controller
 - Integrated installer
 - English and Russian installer languages
 - Widescreen mode (full screen mode in Original settings) without specific aspect ratio
@@ -94,7 +95,9 @@ Modified or unsupported game files will fail verification.
 
 ## Build Info
 
-Make sure you have installed: VS 2022 with C++ Build Tools, WinSDK, Clang, CMake, Ninja, .net sdk 10. ReXGlue included.
+Make sure you have installed: VS 2022 with C++ Build Tools, WinSDK, LLVM Clang 18+ (the ReXGlue SDK requires Clang), CMake, Ninja, .net sdk 10. ReXGlue included.
+
+Game-specific hooks and extra function entry points live in `stf_xbla_manifest.toml`, so the generated sources are never edited by hand. `prepare-game.ps1` checks that `default.xex` is the expected version before generating code.
 
 To compile all project:
 
@@ -153,9 +156,12 @@ Back up this folder if you want to keep your saves before removing the game.
 
 This is an early release, so there are still some problems to fix.
 
-- The recompilation settings menu may sometimes be too small for its contents.
-- Local multiplayer input is present but has not been fully tested.
-- Original Xbox Live functionality is not considered supported.
+- Local multiplayer (two controllers, or keyboard versus controller) has not
+  been tested yet.
+- Original Xbox Live functionality (online battles, leaderboards) is not supported.
+  The servers are gone; the game shows its own "Xbox LIVE" messages instead.
+- The game logic runs at a fixed 60 steps per second, as on Xbox 360, so frame
+  rates above 60 FPS are not possible without per-object interpolation.
 - Mod compatibility has not been tested yet.
 
 ---

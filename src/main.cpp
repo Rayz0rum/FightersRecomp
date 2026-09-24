@@ -6,7 +6,11 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/function_dispatcher.h>
 #include <rex/ui/keybinds.h>
+#include <rex/input/device_assignment.h>
+#include <rex/input/input_system.h>
+#include <rex/system/xmemory.h>
 #include <Windows.h>
+#include <timeapi.h>
 #include <algorithm>
 #include <atomic>
 #include <array>
@@ -20,40 +24,44 @@
 #include <vector>
 #include "stf_xbla_app.h"
 
+// Drivers only honor these in the main executable (the copies in the GPU plugin
+// DLL are ignored), so without them hybrid laptops run on the integrated GPU.
+extern "C" {
+__declspec(dllexport) DWORD NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+
 uint32_t StfrMapHelpOptionsSelection(uint32_t selection);
 
 namespace {
 std::atomic<int> g_pc_width{1920}, g_pc_height{1080}, g_pc_fps{60};
 std::atomic<bool> g_pc_fullscreen{true}, g_pc_vsync{true};
 std::atomic<int> g_pc_aa{1};
+std::atomic<int> g_keyboard_player{1};
 std::atomic<int> g_original_screen_size{-1};
 using SetGpuPostEffect = void (*)(void*, int);
 std::atomic<void*> g_graphics_system{nullptr};
 std::atomic<SetGpuPostEffect> g_set_gpu_post_effect{nullptr};
-bool g_pc_page = false;
 std::atomic<bool> g_recomp_settings_open{false};
-std::atomic<int> g_native_settings_page{0};
 std::atomic<bool> g_remap_open{false};
 std::atomic<int> g_remap_page{0};
 std::atomic<int> g_remap_selected_row{0};
 std::atomic<int> g_remap_capture_binding{-1};
 std::atomic<WPARAM> g_remap_capture_activation_key{0};
-std::atomic<int> g_requested_settings_page{0};
 std::atomic<uint32_t> g_remap_reset_generation{0};
-std::array<uint32_t, 5> g_original_setting_values{};
-std::array<uint32_t, 5> g_original_setting_max{};
-std::array<int, 5> g_pc_setting_values{{1, 1, 1, 1, 1}};
+// Resolution, Screen Type, Frame Rate, VSync, Anti-Aliasing, Keyboard Player.
+constexpr int kPcSettingRows = 6;
+std::array<int, kPcSettingRows> g_pc_setting_values{{1, 1, 1, 1, 1, 0}};
 bool g_pc_setting_values_initialized = false;
 std::atomic<int> g_pc_selected_row{0};
 std::mutex g_pc_setting_values_mutex;
-bool g_original_settings_snapshot_valid = false;
 std::atomic<uint32_t> g_help_options_object{0};
 std::atomic<uint32_t> g_help_options_selection{0xFFFFFFFFu};
 std::atomic<bool> g_help_options_active{false};
 std::atomic<ULONGLONG> g_help_options_draw_tick{0};
 std::atomic<bool> g_reset_dialog_open{false};
 std::atomic<uint8_t*> g_guest_base{nullptr};
-uint32_t g_active_settings_object = 0;
+std::atomic<rex::memory::Memory*> g_guest_memory{nullptr};
 std::array<uint32_t, 45> g_recomp_string_buffers{};
 std::atomic<rex::system::KernelState*> g_achievement_kernel{nullptr};
 std::atomic<bool> g_achievements_open{false};
@@ -129,7 +137,10 @@ HWND FindGameWindow()
 void ApplyPcSettings()
 {
     rex::cvar::SetFlagByName("fullscreen", g_pc_fullscreen.load() ? "true" : "false");
+    // VSync and the frame rate only change how frames reach the display. The
+    // game steps its simulation once per 60 Hz vblank, so its speed is fixed.
     rex::cvar::SetFlagByName("vsync", g_pc_vsync.load() ? "true" : "false");
+    rex::cvar::SetFlagByName("guest_present_interval", g_pc_fps.load() == 30 ? "2" : "1");
     rex::cvar::SetFlagByName("window_width", std::to_string(g_pc_width.load()));
     rex::cvar::SetFlagByName("window_height", std::to_string(g_pc_height.load()));
     const int aa = g_pc_aa.load();
@@ -163,8 +174,10 @@ void LoadPcSettings(bool apply = true)
         else if (key == "height") g_pc_height = value;
         else if (key == "fullscreen") g_pc_fullscreen = value != 0;
         else if (key == "vsync") g_pc_vsync = value != 0;
-        else if (key == "fps") g_pc_fps = value;
+        // Older versions offered 120/144, which only sped the game up.
+        else if (key == "fps") g_pc_fps = value == 30 ? 30 : 60;
         else if (key == "aa") g_pc_aa = value == 3 ? 1 : std::clamp(value, 0, 2);
+        else if (key == "keyboard_player") g_keyboard_player = value == 2 ? 2 : 1;
     }
     if (apply) ApplyPcSettings();
 }
@@ -181,7 +194,8 @@ void SavePcSettings()
          << "fullscreen=" << (g_pc_fullscreen.load() ? 1 : 0) << '\n'
          << "vsync=" << (g_pc_vsync.load() ? 1 : 0) << '\n'
          << "fps=" << g_pc_fps.load() << '\n'
-         << "aa=" << g_pc_aa.load() << '\n';
+         << "aa=" << g_pc_aa.load() << '\n'
+         << "keyboard_player=" << g_keyboard_player.load() << '\n';
 }
 
 struct RemapBinding {
@@ -233,12 +247,10 @@ void ResetRemapBindings()
     ++g_remap_reset_generation;
 }
 
-uint32_t AllocateGameBuffer(PPCContext& ctx, uint8_t* base, uint32_t size)
+uint32_t AllocateGameBuffer(uint32_t size)
 {
-    ctx.r3.u64 = size;
-    ctx.r4.u64 = 0;
-    sub_82150B60(ctx, base);
-    return ctx.r3.u32;
+    auto* memory = g_guest_memory.load();
+    return memory ? memory->SystemHeapAlloc(size) : 0;
 }
 
 void WriteGameUtf8(uint32_t address, size_t capacity, std::string_view text, uint8_t* base)
@@ -251,23 +263,27 @@ void WriteGameUtf8(uint32_t address, size_t capacity, std::string_view text, uin
     }
 }
 
-uint32_t GetRecompStringPointer(uint32_t id, PPCContext& ctx, uint8_t* base)
+uint32_t GetRecompStringPointer(uint32_t id, uint8_t* base)
 {
+    // Frame Rate keeps its ids (5308, 5309). 120/144 FPS are gone because the
+    // game can't draw more than one frame per 60 Hz simulation step; their ids
+    // (5310, 5311) now hold the Keyboard Player row.
     static constexpr std::array<std::string_view, 45> strings{{
         "Recompilation Settings", "RECOMPILATION SETTINGS",
         "Resolution", "HD", "FHD", "2K", "4K",
         "Screen Type", "Windowed", "Fullscreen",
-        "Frame Rate", "30 FPS", "60 FPS", "120 FPS", "144 FPS",
+        "Frame Rate", "30 FPS", "60 FPS", "", "",
         "VSync", "Off", "On",
         "Anti-Aliasing", "Off", "FXAA", "FXAA Extreme", "",
         "Choose the game resolution.",
         "Choose windowed or fullscreen display.",
-        "Choose the frame-rate limit.",
-        "Enable or disable vertical synchronization.",
+        "Frames shown per second. Game speed stays the same.",
+        "Sync to the display. Off may tear but lowers latency.",
         "Choose an anti-aliasing mode.",
         "Resolution: HD >", "Resolution: < FHD >", "Resolution: < 2K >", "Resolution: < 4K",
         "Screen Type: Windowed >", "Screen Type: < Fullscreen",
-        "Frame Rate: 30 FPS >", "Frame Rate: < 60 FPS >", "Frame Rate: < 120 FPS >", "Frame Rate: < 144 FPS",
+        "Frame Rate: 30 FPS >", "Frame Rate: < 60 FPS",
+        "Keyboard: Player 1 >", "Keyboard: < Player 2",
         "VSync: Off >", "VSync: < On",
         "Anti-Aliasing: Off >", "Anti-Aliasing: < FXAA >",
         "Anti-Aliasing: < FXAA Extreme", "",
@@ -277,10 +293,7 @@ uint32_t GetRecompStringPointer(uint32_t id, PPCContext& ctx, uint8_t* base)
     const size_t index = id - 5274;
     uint32_t& buffer = g_recomp_string_buffers[index];
     if (!buffer) {
-        ctx.r3.u64 = 128;
-        ctx.r4.u64 = 0;
-        sub_82150B60(ctx, base);
-        buffer = ctx.r3.u32;
+        buffer = AllocateGameBuffer(128);
         if (!buffer) return 0;
         WriteGameUtf8(buffer, 128, strings[index], base);
     }
@@ -335,12 +348,12 @@ void RefreshAchievementPage()
     g_achievement_row_text[7].clear();
 }
 
-uint32_t GetAchievementStringPointer(uint32_t id, PPCContext& ctx, uint8_t* base)
+uint32_t GetAchievementStringPointer(uint32_t id, uint8_t* base)
 {
     if (id < 5319 || id > 5326) return 0;
     const size_t index = id - 5319;
     uint32_t& buffer = g_achievement_row_buffers[index];
-    if (!buffer) buffer = AllocateGameBuffer(ctx, base, 128);
+    if (!buffer) buffer = AllocateGameBuffer(128);
     if (!buffer) return 0;
     std::lock_guard lock(g_achievement_rows_mutex);
     WriteGameUtf8(buffer, 128, g_achievement_row_text[index], base);
@@ -404,12 +417,12 @@ void RefreshRemapPage()
     }
 }
 
-uint32_t GetRemapStringPointer(uint32_t id, PPCContext& ctx, uint8_t* base)
+uint32_t GetRemapStringPointer(uint32_t id, uint8_t* base)
 {
     if (id < 5327 || id > 5334) return 0;
     const size_t index = id - 5327;
     uint32_t& buffer = g_remap_string_buffers[index];
-    if (!buffer) buffer = AllocateGameBuffer(ctx, base, 128);
+    if (!buffer) buffer = AllocateGameBuffer(128);
     if (!buffer) return 0;
     std::lock_guard lock(g_remap_rows_mutex);
     WriteGameUtf8(buffer, 128, g_remap_row_text[index], base);
@@ -426,7 +439,7 @@ void ChangeRemapPage(int direction)
     RefreshRemapPage();
 }
 
-constexpr std::array<int, 5> kPcMenuMaxima{{3, 1, 3, 1, 2}};
+constexpr std::array<int, kPcSettingRows> kPcMenuMaxima{{3, 1, 1, 1, 2, 1}};
 
 void InitializePcMenuValues()
 {
@@ -436,10 +449,10 @@ void InitializePcMenuValues()
         g_pc_width.load() >= 3840 ? 3 : g_pc_width.load() >= 2560 ? 2 :
             g_pc_width.load() >= 1920 ? 1 : 0,
         g_pc_fullscreen.load() ? 1 : 0,
-        g_pc_fps.load() >= 144 ? 3 : g_pc_fps.load() >= 120 ? 2 :
-            g_pc_fps.load() >= 60 ? 1 : 0,
+        g_pc_fps.load() >= 60 ? 1 : 0,
         g_pc_vsync.load() ? 1 : 0,
         std::clamp(g_pc_aa.load(), 0, 2),
+        g_keyboard_player.load() == 2 ? 1 : 0,
     }};
     g_pc_setting_values_initialized = true;
 }
@@ -456,13 +469,14 @@ void AdjustPcMenuValue(int row, int direction)
         value = next;
         static constexpr int widths[4] = {1280, 1920, 2560, 3840};
         static constexpr int heights[4] = {720, 1080, 1440, 2160};
-        static constexpr int limits[4] = {30, 60, 120, 144};
+        static constexpr int limits[2] = {30, 60};
         g_pc_width = widths[g_pc_setting_values[0]];
         g_pc_height = heights[g_pc_setting_values[0]];
         g_pc_fullscreen = g_pc_setting_values[1] != 0;
         g_pc_fps = limits[g_pc_setting_values[2]];
         g_pc_vsync = g_pc_setting_values[3] != 0;
         g_pc_aa = g_pc_setting_values[4];
+        g_keyboard_player = g_pc_setting_values[5] ? 2 : 1;
         REXLOG_INFO("Recomp menu changed row {} to {}", row, next);
     }
     SavePcSettings();
@@ -474,10 +488,7 @@ void CloseRecompSettings()
     uint8_t* base = g_guest_base.load();
     g_recomp_settings_open = false;
     g_pc_selected_row = 0;
-    g_pc_page = false;
-    g_native_settings_page = 0;
-    g_requested_settings_page = 0;
-    if (const uint32_t object = g_help_options_object.load(); object && base) 
+    if (const uint32_t object = g_help_options_object.load(); object && base)
     {
         REX_STORE_U32(object + 76, 3);
     }
@@ -694,7 +705,7 @@ LRESULT CALLBACK GameWindowProc(HWND window, UINT message, WPARAM wparam, LPARAM
 			int row = g_pc_selected_row.load();
 			switch (wparam) {
 			case VK_UP: case 'W': g_pc_selected_row = std::max(0, row - 1); break;
-			case VK_DOWN: case 'S': g_pc_selected_row = std::min(4, row + 1); break;
+			case VK_DOWN: case 'S': g_pc_selected_row = std::min(kPcSettingRows - 1, row + 1); break;
 			case VK_LEFT: case 'A': AdjustPcMenuValue(row, -1); break;
 			case VK_RIGHT: case 'D': AdjustPcMenuValue(row, 1); break;
 			case VK_SPACE: case VK_RETURN:
@@ -809,9 +820,6 @@ LRESULT CALLBACK GameWindowProc(HWND window, UINT message, WPARAM wparam, LPARAM
 		if (selected == 3) {
 			InitializePcMenuValues();
 			g_pc_selected_row = 0;
-			g_native_settings_page = 0;
-			g_requested_settings_page = 0;
-			g_pc_page = false;
 			g_recomp_settings_open = true;
 			REXLOG_INFO("Opened Recomp menu inside Help & Options scene");
 			return true;
@@ -897,6 +905,39 @@ struct DebugKeyBlocker {
     }
 } g_debug_key_blocker;
 
+// Like the SDK's SlotAssignment (pad N is player N+1, keyboard shares player 1)
+// but can move the keyboard to player 2, so one person on the keyboard can play
+// against one on a controller. Menus only listen to player 1, so the keyboard
+// stays there while no controller is connected.
+class StfrDeviceAssignment final : public rex::input::DeviceAssignment {
+public:
+    void OnDevicesChanged(const std::vector<rex::input::DeviceInfo>& devices) override
+    {
+        std::lock_guard lock(mutex_);
+        devices_ = devices;
+    }
+
+    void DevicesForUser(uint32_t user_index, std::vector<rex::input::DeviceId>& out) const override
+    {
+        out.clear();
+        std::lock_guard lock(mutex_);
+        const bool has_pad = std::any_of(devices_.begin(), devices_.end(),
+                                         [](const auto& device) { return !device.synthetic; });
+        const uint32_t keyboard_user = g_keyboard_player.load() == 2 && has_pad ? 1 : 0;
+        for (const auto& device : devices_) {
+            uint32_t user = device.ordinal;
+            if (device.synthetic) {
+                user = device.name == "Keyboard and Mouse" ? keyboard_user : 0;
+            }
+            if (user == user_index) out.push_back(device.id);
+        }
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::vector<rex::input::DeviceInfo> devices_;
+};
+
 }
 
 REX_DEFINE_APP(stf_xbla, StfXblaApp::Create)
@@ -950,15 +991,27 @@ void StfXblaApp::OnPreSetup(rex::RuntimeConfig& config)
     }
     LoadOriginalScreenSize();
 
+    // 1 ms timer resolution for the runtime's short sleeps (GPU waits, audio);
+    // the Windows default of 15.6 ms makes frame pacing uneven.
+    timeBeginPeriod(1);
+
     if (config.gpu_plugin.empty()) {
         config.gpu_plugin = "xenos";
     }
+
+    config.input_factory = [](bool tool_mode) -> std::unique_ptr<rex::system::IInputSystem> {
+        auto input = rex::input::CreateDefaultInputSystem(tool_mode);
+        input->SetDeviceAssignment(std::make_unique<StfrDeviceAssignment>());
+        return input;
+    };
 
     ApplyPcSettings();
 }
 
 void StfXblaApp::OnPostSetup()
 {
+    g_guest_memory = runtime()->memory();
+    g_guest_base = runtime()->memory()->virtual_membase();
     g_achievement_kernel = runtime()->kernel_state();
     g_graphics_system = runtime()->graphics_system();
     HMODULE gpu_plugin = GetModuleHandleW(L"rexgpu-xenos.dll");
@@ -976,60 +1029,46 @@ void StfXblaApp::OnShutdown()
     g_achievement_kernel = nullptr;
     g_set_gpu_post_effect = nullptr;
     g_graphics_system = nullptr;
+    g_guest_memory = nullptr;
+    timeEndPeriod(1);
 }
 
 void StfXblaApp::OnPreLaunchModule()
 {
 }
 
-void StfrApplyPcFrameLimit()
-{
-    static auto next_frame = std::chrono::steady_clock::now();
-    const int limit = g_pc_fps.load();
-    if (limit <= 0) { next_frame = std::chrono::steady_clock::now(); return; }
-    const auto interval = std::chrono::nanoseconds(1'000'000'000LL / limit);
-    next_frame += interval;
-    const auto now = std::chrono::steady_clock::now();
-    if (next_frame > now) std::this_thread::sleep_until(next_frame);
-    else if (now - next_frame > interval * 2) next_frame = now;
-}
-
-void StfrPrepareNativePcSettings(uint32_t object, uint32_t, uint8_t* base)
+void StfrPrepareNativePcSettings(uint32_t object, uint8_t* base)
 {
     // Watch the Screen Size setting and update the display right away
     if (object && base) {
         const uint32_t size = REX_LOAD_U32(object + 460);
         if (size <= 2) SetOriginalScreenSize(static_cast<int>(size), true);
     }
-    g_guest_base = base;
     g_help_options_active = false;
     g_help_options_draw_tick = 0;
     g_recomp_settings_open = false;
     g_remap_open = false;
     g_remap_capture_binding = -1;
-    g_native_settings_page = 0;
-    g_requested_settings_page = 0;
-    g_pc_page = false;
-    g_active_settings_object = 0;
 }
 
-extern "C" bool StfrAdjustPcSettingBridge(uint32_t, int)
+// Rows the Help & Options scene shows on its current page.
+int HelpOptionsRowCount()
 {
-    return false;
+    if (g_achievements_open.load() || g_remap_open.load()) return 5;
+    if (g_recomp_settings_open.load()) return kPcSettingRows;
+    return 7;
 }
 
-extern "C" bool StfrIsPcSettingsPageBridge()
+// Menus size their panel by opening it with the window animation authored for
+// their row count: panel type 9 + rows (the main menu's 7 rows use type 16).
+// Help & Options was authored for 5 rows, so the port's pages need others.
+uint32_t PanelTypeForRows(int rows)
 {
-    return false;
-}
-
-extern "C" void StfrCapturePcSettingWidgetBridge(uint32_t)
-{
+    return static_cast<uint32_t>(9 + rows);
 }
 
 void StfrPrepareHelpOptions(uint32_t object, uint32_t labels, uint8_t* base)
 {
-    g_guest_base = base;
     g_help_options_draw_tick = GetTickCount64();
     if (g_achievements_open.load()) {
         for (uint32_t row = 0; row < 5; ++row) {
@@ -1045,18 +1084,17 @@ void StfrPrepareHelpOptions(uint32_t object, uint32_t labels, uint8_t* base)
     }
     if (g_recomp_settings_open.load()) {
         InitializePcMenuValues();
-        std::array<int, 5> values;
+        std::array<int, kPcSettingRows> values;
         {
             std::lock_guard lock(g_pc_setting_values_mutex);
             values = g_pc_setting_values;
         }
-        constexpr uint32_t first_ids[5] = {5302, 5306, 5308, 5312, 5314};
-        for (int i = 0; i < 5; ++i) {
+        constexpr uint32_t first_ids[kPcSettingRows] = {5302, 5306, 5308, 5312, 5314, 5310};
+        for (int i = 0; i < kPcSettingRows; ++i) {
             REX_STORE_U32(labels + i * 4, first_ids[i] + static_cast<uint32_t>(values[i]));
             REX_STORE_U8(object + 565 + i, 0);
         }
-        REX_STORE_U8(object + 570, 1);
-        REX_STORE_U32(object + 436, 4);
+        REX_STORE_U32(object + 436, kPcSettingRows - 1);
         REX_STORE_U32(object + 76, static_cast<uint32_t>(g_pc_selected_row.load()));
         g_help_options_object = object;
         g_help_options_active = true;
@@ -1079,16 +1117,6 @@ void StfrPrepareHelpOptions(uint32_t object, uint32_t labels, uint8_t* base)
         return;
     }
     g_recomp_settings_open = false;
-    if (g_original_settings_snapshot_valid && g_active_settings_object) {
-        for (int i = 0; i < 5; ++i) {
-            REX_STORE_U32(g_active_settings_object + 452 + i * 4, g_original_setting_values[i]);
-            REX_STORE_U32(g_active_settings_object + 472 + i * 4, g_original_setting_max[i]);
-        }
-        g_original_settings_snapshot_valid = false;
-    }
-    g_active_settings_object = 0;
-    g_native_settings_page = 0;
-    g_pc_page = false;
 
     // Add two pc pages
     constexpr uint32_t rows[7] = {419, 420, 421, 5274, 5327, 422, 423};
@@ -1102,42 +1130,23 @@ void StfrPrepareHelpOptions(uint32_t object, uint32_t labels, uint8_t* base)
     g_help_options_active = true;
 }
 
-void StfrRestoreOriginalSettingsBeforeClose(uint32_t object, uint8_t* base)
-{
-    if (!g_original_settings_snapshot_valid || g_native_settings_page.load() == 0) return;
-    for (int i = 0; i < 5; ++i) {
-        REX_STORE_U32(object + 452 + i * 4, g_original_setting_values[i]);
-        REX_STORE_U32(object + 472 + i * 4, g_original_setting_max[i]);
-    }
-    g_original_settings_snapshot_valid = false;
-    g_recomp_settings_open = false;
-    g_remap_open = false;
-    g_native_settings_page = 0;
-    g_pc_page = false;
-}
-
 uint32_t StfrMapHelpOptionsSelection(uint32_t selection)
 {
     // Keep the original menu
     uint32_t mapped = selection;
     switch (selection) {
-    case 2: 
+    case 2:
         g_recomp_settings_open = false;
         g_remap_open = false;
-        g_requested_settings_page = 0;
-        g_pc_page = false;
-        g_native_settings_page = 0;
         mapped = 2;
         break;
-    case 3: case 4: 
+    case 3: case 4:
         mapped = selection;
         break;
     case 5:
-        g_requested_settings_page = 0;
         mapped = 3;
         break;
     case 6:
-        g_requested_settings_page = 0;
         mapped = 4;
         break;
     default:
@@ -1146,85 +1155,7 @@ uint32_t StfrMapHelpOptionsSelection(uint32_t selection)
     return mapped;
 }
 
-void StfrPatchSettingsDescriptions(uint32_t descriptions, uint8_t* base)
-{
-    if (g_native_settings_page.load() == 2) {
-        const uint32_t ids[5] = {411, 412, 413, 414, 415};
-        for (int i = 0; i < 5; ++i) REX_STORE_U32(descriptions + i * 4, ids[i]);
-        return;
-    }
-    if (g_native_settings_page.load() != 1) return;
-    const uint32_t ids[5] = {5297, 5298, 5299, 5300, 5301};
-    for (int i = 0; i < 5; ++i) REX_STORE_U32(descriptions + i * 4, ids[i]);
-}
-
-uint32_t StfrGetSettingsMax(uint32_t row, uint32_t original)
-{
-    if (g_native_settings_page.load() == 2) return original;
-    if (g_native_settings_page.load() != 1 || row >= 5) return original;
-    constexpr uint32_t pc_max[5] = {3, 1, 3, 1, 3};
-    return pc_max[row];
-}
-
-bool StfrIsNativePcSettingsActive()
-{
-    return g_native_settings_page.load() != 0;
-}
-
-uint32_t StfrGetSettingsTitle(uint32_t original)
-{
-    if (g_native_settings_page.load() == 2) return 425;
-    return g_native_settings_page.load() == 1 ? 5275 : original;
-}
-
-uint32_t StfrGetSettingsValueString(uint32_t label, uint32_t value, uint32_t original)
-{
-    if (g_native_settings_page.load() == 1) {
-        if (label == 5276) return 5277 + static_cast<uint32_t>(std::clamp(g_pc_setting_values[0], 0, 3));
-        if (label == 5281) return 5282 + static_cast<uint32_t>(std::clamp(g_pc_setting_values[1], 0, 1));
-        if (label == 5284) return 5285 + static_cast<uint32_t>(std::clamp(g_pc_setting_values[2], 0, 3));
-        if (label == 5289) return 5290 + static_cast<uint32_t>(std::clamp(g_pc_setting_values[3], 0, 1));
-        if (label == 5292) return 5293 + static_cast<uint32_t>(std::clamp(g_pc_setting_values[4], 0, 3));
-    }
-    return original;
-}
-
-extern "C" void StfrPrepareNativePcSettingsBridge(uint32_t object, uint32_t labels, uint8_t* base)
-{
-    StfrPrepareNativePcSettings(object, labels, base);
-}
-
-extern "C" void StfrPrepareHelpOptionsBridge(uint32_t object, uint32_t labels, uint8_t* base)
-{
-    StfrPrepareHelpOptions(object, labels, base);
-}
-
-extern "C" uint32_t StfrGetSettingsTitleBridge(uint32_t original)
-{
-    return StfrGetSettingsTitle(original);
-}
-
-extern "C" uint32_t StfrGetHelpOptionsTitleBridge()
-{
-    if (g_achievements_open.load()) return 5319;
-    if (g_remap_open.load()) return 5328;
-    return g_recomp_settings_open.load() ? 5275 : 418;
-}
-
-extern "C" uint32_t StfrGetSettingsValueStringBridge(uint32_t label, uint32_t value, uint32_t original)
-{
-    return StfrGetSettingsValueString(label, value, original);
-}
-
-extern "C" uint32_t StfrResolveRecompStringBridge(uint32_t id, PPCContext& ctx, uint8_t* base)
-{
-    if (id >= 5327 && id <= 5334) return GetRemapStringPointer(id, ctx, base);
-    if (id >= 5319 && id <= 5326) return GetAchievementStringPointer(id, ctx, base);
-    return GetRecompStringPointer(id, ctx, base);
-}
-
-extern "C" uint32_t StfrResolvePauseAchievementStringBridge(uint32_t id,
-    PPCContext& ctx, uint8_t* base)
+uint32_t StfrResolvePauseAchievementString(uint32_t id, uint8_t* base)
 {
     if (!g_pause_achievements_open.load()) return 0;
     uint32_t replacement = 0;
@@ -1238,32 +1169,25 @@ extern "C" uint32_t StfrResolvePauseAchievementStringBridge(uint32_t id,
     case 194: replacement = 5326; break; // btn back.
     default: return 0;
     }
-    return GetAchievementStringPointer(replacement, ctx, base);
+    return GetAchievementStringPointer(replacement, base);
 }
 
-extern "C" void StfrOpenPauseAchievementsBridge()
+uint32_t StfrResolveMenuDescription(uint8_t* base)
 {
-    g_achievement_page = 0;
-    g_achievement_selected_row = 4;
-    RefreshAchievementPage();
-    g_pause_achievements_open = true;
-    REXLOG_INFO("Opened achievements inside the game's pause menu");
-}
-
-extern "C" uint32_t StfrResolveAchievementDescriptionBridge(PPCContext& ctx, uint8_t* base)
-{
-    if (g_remap_open.load()) return GetRemapStringPointer(5334, ctx, base);
-    if (g_achievements_open.load()) return GetAchievementStringPointer(5325, ctx, base);
+    if (g_remap_open.load()) return GetRemapStringPointer(5334, base);
+    if (g_achievements_open.load()) return GetAchievementStringPointer(5325, base);
     std::string description;
     if (g_recomp_settings_open.load()) {
-        constexpr std::string_view descriptions[5] = {
+        constexpr std::string_view descriptions[kPcSettingRows] = {
             "Choose the game resolution.",
             "Choose windowed or fullscreen display.",
-            "Choose the frame-rate limit.",
-            "Enable or disable vertical synchronization.",
-            "Choose an anti-aliasing mode."
+            "Frames shown per second. Game speed stays the same.",
+            "Sync to the display. Off may tear but lowers latency.",
+            "Choose an anti-aliasing mode.",
+            "Player 2 lets the keyboard play against a controller."
         };
-        description = descriptions[static_cast<size_t>(std::clamp(g_pc_selected_row.load(), 0, 4))];
+        description = descriptions[static_cast<size_t>(
+            std::clamp(g_pc_selected_row.load(), 0, kPcSettingRows - 1))];
     } else if (g_help_options_active.load() && g_help_options_object.load() &&
                GetTickCount64() - g_help_options_draw_tick.load() < 300) {
         switch (REX_LOAD_U32(g_help_options_object.load() + 76)) {
@@ -1279,14 +1203,90 @@ extern "C" uint32_t StfrResolveAchievementDescriptionBridge(PPCContext& ctx, uin
         std::lock_guard lock(g_remap_rows_mutex);
         g_remap_row_text[7] = std::move(description);
     }
-    return GetRemapStringPointer(5334, ctx, base);
+    return GetRemapStringPointer(5334, base);
 }
 
-extern "C" void StfrCaptureMainMenuBridge(uint32_t object, uint8_t* base)
+// Mid-asm hooks declared in stf_xbla_manifest.toml. The generated code passes
+// only the listed registers, so guest memory goes through g_guest_base.
+
+void StfrPrepareHelpOptionsHook(PPCRegister& r29, PPCRegister& r1, PPCRegister& r13)
 {
-    g_guest_base = base;
-    g_main_menu_object = object;
+    uint8_t* base = g_guest_base.load();
+    if (!base) return;
+    StfrPrepareHelpOptions(r29.u32, r1.u32 + 208, base);
+
+    // Switching pages changes the row count, so reopen the panel at the matching
+    // size, the same way the game opens a menu. Only while it is fully open
+    // (state 3), which leaves the closing animation alone.
+    const uint32_t panel = r29.u32 + 508;
+    const uint32_t type = PanelTypeForRows(HelpOptionsRowCount());
+    if (REX_LOAD_U32(panel) == 3 && REX_LOAD_U32(panel + 4) != type) {
+        PPCContext ctx{};
+        ctx.r1 = r1;
+        ctx.r13 = r13;
+        ctx.fpscr.csr = ctx.fpscr.getcsr();
+        ctx.r3.u64 = panel;
+        ctx.r4.u64 = type;
+        sub_82126948(ctx, base);
+    }
+}
+
+void StfrHelpOptionsPanelTypeHook(PPCRegister& r4)
+{
+    r4.u64 = PanelTypeForRows(HelpOptionsRowCount());
+}
+
+void StfrHelpOptionsTitleHook(PPCRegister& r3)
+{
+    if (g_achievements_open.load()) r3.u64 = 5319;
+    else if (g_remap_open.load()) r3.u64 = 5328;
+    else if (g_recomp_settings_open.load()) r3.u64 = 5275;
+}
+
+void StfrPrepareNativeSettingsHook(PPCRegister& r27)
+{
+    StfrPrepareNativePcSettings(r27.u32, g_guest_base.load());
+}
+
+void StfrCaptureMainMenuHook(PPCRegister& r29)
+{
+    g_main_menu_object = r29.u32;
     g_main_menu_draw_tick = GetTickCount64();
+}
+
+bool StfrResolveStringHook(PPCRegister& r3)
+{
+    uint8_t* base = g_guest_base.load();
+    if (!base) return false;
+    const uint32_t id = r3.u32;
+    if (const uint32_t replacement = StfrResolvePauseAchievementString(id, base)) {
+        r3.u64 = replacement;
+        return true;
+    }
+    if (id >= 117 && id <= 123) {
+        if (const uint32_t description = StfrResolveMenuDescription(base)) {
+            r3.u64 = description;
+            return true;
+        }
+    }
+    if (id >= 5274 && id <= 5334) {
+        if (id >= 5327) r3.u64 = GetRemapStringPointer(id, base);
+        else if (id >= 5319) r3.u64 = GetAchievementStringPointer(id, base);
+        else r3.u64 = GetRecompStringPointer(id, base);
+        return true;
+    }
+    return false;
+}
+
+void StfrOpenPauseAchievementsHook(PPCRegister& r3)
+{
+    g_achievement_page = 0;
+    g_achievement_selected_row = 4;
+    RefreshAchievementPage();
+    g_pause_achievements_open = true;
+    REXLOG_INFO("Opened achievements inside the game's pause menu");
+    // Keep the in-game pause menu active instead of calling the Xbox Guide.
+    r3.u64 = 1;
 }
 
 // checks online (TO DO)

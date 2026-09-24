@@ -109,6 +109,10 @@ class CommandProcessor {
   virtual void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
                          uint32_t frontbuffer_height) = 0;
 
+  // Whether the current guest swap should be handed to the host presenter, per
+  // guest_present_interval. Call once per guest swap.
+  bool ShouldPresentGuestSwap();
+
   // May be called not only from the command processor thread when the command
   // processor is paused, and the termination of this function may be explicitly
   // awaited.
@@ -244,6 +248,7 @@ class CommandProcessor {
   std::vector<uint32_t> me_bin_;
 
   uint32_t counter_ = 0;
+  uint32_t guest_swaps_since_present_ = 0;
 
   uint32_t primary_buffer_ptr_ = 0;
   uint32_t primary_buffer_size_ = 0;

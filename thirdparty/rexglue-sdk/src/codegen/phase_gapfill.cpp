@@ -62,6 +62,14 @@ std::vector<CodeRegion> splitRegionOnTerminators(
       if (target != segmentStart && knownCallables.contains(target)) {
         shouldSplit = true;
         reason = "tail call";
+      } else if (target < segmentStart || target >= region.end) {
+        // A function body is contiguous from its entry, so an unconditional
+        // branch that leaves the segment is a tail call even when its target
+        // has not been registered yet. Runs of adjacent this-adjusting thunks
+        // (addi r3,r3,N; b target) are only reachable through vtables and
+        // would otherwise be merged into the first thunk and dropped.
+        shouldSplit = true;
+        reason = "tail call (out of segment)";
       }
     }
 

@@ -35,7 +35,18 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/user_module.h>
 
-REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");
+// Host presentation sync is the "vsync" cvar in the presenter. This one only
+// exists for debugging: most titles advance one simulation step per frame, so
+// an uncapped guest vblank makes them run too fast.
+REXCVAR_DEFINE_BOOL(guest_vblank_uncapped, false, "GPU",
+                    "Fire the guest vertical blank interrupt at 1000 Hz instead of the video "
+                    "mode refresh rate. Frame-locked games will run too fast.");
+
+REXCVAR_DEFINE_UINT32(guest_present_interval, 1, "GPU",
+                      "Hand every Nth guest frame to the host presenter (1 = every frame, "
+                      "2 = half rate). The game itself keeps running at its native rate.")
+    .range(1, 4)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_BOOL(clear_memory_page_state, true, "GPU",
                     "Refresh page-valid state from GPU-written memory at frame end. "
@@ -964,6 +975,15 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
   return true;
 }
 
+bool CommandProcessor::ShouldPresentGuestSwap() {
+  uint32_t interval = std::clamp(REXCVAR_GET(guest_present_interval), uint32_t(1), uint32_t(4));
+  if (++guest_swaps_since_present_ < interval) {
+    return false;
+  }
+  guest_swaps_since_present_ = 0;
+  return true;
+}
+
 bool CommandProcessor::ExecutePacketType3_INDIRECT_BUFFER(memory::RingBuffer* reader,
                                                           uint32_t packet, uint32_t count) {
   // indirect buffer dispatch
@@ -1033,7 +1053,7 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
       // Wait.
       if (wait >= 0x100) {
         PrepareForWait();
-        if (!REXCVAR_GET(vsync)) {
+        if (REXCVAR_GET(guest_vblank_uncapped)) {
           // User wants it fast and dangerous.
           rex::thread::MaybeYield();
         } else {
