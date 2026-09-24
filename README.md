@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> I wasn’t sure that posting this project would cause such a stir. I see that many people are hating even on the minimal use of AI and ReXGlue. I’m Sparkos The Wolf, and I’m unlikely to continue working on it; I’m leaving the project on GitHub for those who can actually take the idea further. I couldn’t do it on XenonRecomp and decided to try ReXGlue, not knowing what kind of reputation it had — I think that’s why it’s been without releases for a whole month, and that was a mistake. 
+
 <div align="center">
 
 <img src="assets/logo.png" width="600" alt="Sonic the Fighters Recompiled">
