@@ -74,7 +74,7 @@ REXCVAR_DEFINE_STRING(path_tracing_denoiser, "nrd", "GPU/Path Tracing",
                       "Denoiser of the traced lighting: nrd (NVIDIA Real-time Denoisers), dlss_rr "
                       "(DLSS Ray Reconstruction, NVIDIA RTX GPUs), fsr_rr (FSR Ray Regeneration, "
                       "AMD Radeon RX 9000 GPUs), builtin. Falls back to nrd, then builtin, if "
-                      "unavailable");
+                      "unavailable. off shows the game's own lighting");
 REXCVAR_DEFINE_DOUBLE(path_tracing_gi_distance, 100.0, "GPU/Path Tracing",
                       "Maximum distance of global illumination rays in view space units");
 REXCVAR_DEFINE_DOUBLE(path_tracing_bounce, 1.0, "GPU/Path Tracing",
@@ -1359,7 +1359,8 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
     deferred_command_list_.D3DSOSetTarget(nullptr);
     pt_capture_bound_ = false;
   }
-  if (!pt_root_signature_ || !pt_captured_this_frame_ || !width || !height) {
+  if (!pt_root_signature_ || !pt_captured_this_frame_ || !width || !height ||
+      REXCVAR_GET(path_tracing_denoiser) == "off") {
     return nullptr;
   }
   pt_output_area_ = uint64_t(width) * height;

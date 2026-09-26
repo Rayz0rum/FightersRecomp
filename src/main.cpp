@@ -38,6 +38,11 @@ std::atomic<int> g_pc_width{1920}, g_pc_height{1080}, g_pc_fps{60};
 std::atomic<bool> g_pc_fullscreen{true}, g_pc_vsync{true};
 std::atomic<int> g_pc_aa{1};
 std::atomic<int> g_keyboard_player{1};
+// Path tracing denoiser chosen in the menu: -1 - not chosen (the config file's
+// path_tracing_denoiser stays), 0 - off, 1 - NRD, 2 - DLSS Ray Reconstruction,
+// 3 - FSR Ray Regeneration.
+std::atomic<int> g_pc_path_tracing{-1};
+constexpr const char* kPathTracingDenoisers[4] = {"off", "nrd", "dlss_rr", "fsr_rr"};
 std::atomic<int> g_original_screen_size{-1};
 using SetGpuPostEffect = void (*)(void*, int);
 std::atomic<void*> g_graphics_system{nullptr};
@@ -49,9 +54,10 @@ std::atomic<int> g_remap_selected_row{0};
 std::atomic<int> g_remap_capture_binding{-1};
 std::atomic<WPARAM> g_remap_capture_activation_key{0};
 std::atomic<uint32_t> g_remap_reset_generation{0};
-// Resolution, Screen Type, Frame Rate, VSync, Anti-Aliasing, Keyboard Player.
-constexpr int kPcSettingRows = 6;
-std::array<int, kPcSettingRows> g_pc_setting_values{{1, 1, 1, 1, 1, 0}};
+// Resolution, Screen Type, Frame Rate, VSync, Anti-Aliasing, Keyboard Player,
+// Path Tracing.
+constexpr int kPcSettingRows = 7;
+std::array<int, kPcSettingRows> g_pc_setting_values{{1, 1, 1, 1, 1, 0, 1}};
 bool g_pc_setting_values_initialized = false;
 std::atomic<int> g_pc_selected_row{0};
 std::mutex g_pc_setting_values_mutex;
@@ -149,6 +155,12 @@ void ApplyPcSettings()
     if (auto set_effect = g_set_gpu_post_effect.load()) {
         set_effect(g_graphics_system.load(), aa);
     }
+    // Path tracing itself needs path_tracing = true in the config at launch;
+    // the denoiser (or off) can change any time.
+    if (const int path_tracing = g_pc_path_tracing.load(); path_tracing >= 0) {
+        rex::cvar::SetFlagByName("path_tracing_denoiser",
+                                 kPathTracingDenoisers[std::clamp(path_tracing, 0, 3)]);
+    }
     if (!g_pc_fullscreen.load()) {
         if (HWND window = FindGameWindow()) {
             RECT rect{0, 0, g_pc_width.load(), g_pc_height.load()};
@@ -178,6 +190,7 @@ void LoadPcSettings(bool apply = true)
         else if (key == "fps") g_pc_fps = value == 30 ? 30 : 60;
         else if (key == "aa") g_pc_aa = value == 3 ? 1 : std::clamp(value, 0, 2);
         else if (key == "keyboard_player") g_keyboard_player = value == 2 ? 2 : 1;
+        else if (key == "path_tracing") g_pc_path_tracing = std::clamp(value, 0, 3);
     }
     if (apply) ApplyPcSettings();
 }
@@ -196,6 +209,9 @@ void SavePcSettings()
          << "fps=" << g_pc_fps.load() << '\n'
          << "aa=" << g_pc_aa.load() << '\n'
          << "keyboard_player=" << g_keyboard_player.load() << '\n';
+    if (g_pc_path_tracing.load() >= 0) {
+        file << "path_tracing=" << g_pc_path_tracing.load() << '\n';
+    }
 }
 
 struct RemapBinding {
@@ -261,6 +277,36 @@ void WriteGameUtf8(uint32_t address, size_t capacity, std::string_view text, uin
         REX_STORE_U8(address + static_cast<uint32_t>(i),
                      i < length ? static_cast<uint8_t>(text[i]) : 0);
     }
+}
+
+// The Path Tracing row's labels (ids 5335...5338).
+std::array<uint32_t, 4> g_path_tracing_string_buffers{};
+
+uint32_t GetPathTracingStringPointer(uint32_t id, uint8_t* base)
+{
+    static constexpr std::array<std::string_view, 4> strings{{
+        "Path Tracing: Off >", "Path Tracing: < NRD >", "Path Tracing: < DLSS RR >",
+        "Path Tracing: < FSR RR",
+    }};
+    if (id < 5335 || id > 5338) return 0;
+    uint32_t& buffer = g_path_tracing_string_buffers[id - 5335];
+    if (!buffer) {
+        buffer = AllocateGameBuffer(128);
+        if (!buffer) return 0;
+        WriteGameUtf8(buffer, 128, strings[id - 5335], base);
+    }
+    return buffer;
+}
+
+// The denoiser currently used (menu choice or config file) as a menu value.
+int CurrentPathTracingMenuValue()
+{
+    if (const int chosen = g_pc_path_tracing.load(); chosen >= 0) return chosen;
+    const std::string denoiser = rex::cvar::GetFlagByName("path_tracing_denoiser");
+    for (int i = 0; i < 4; ++i) {
+        if (denoiser == kPathTracingDenoisers[i]) return i;
+    }
+    return denoiser == "dlss" ? 2 : denoiser == "fsr" ? 3 : 1;
 }
 
 uint32_t GetRecompStringPointer(uint32_t id, uint8_t* base)
@@ -439,7 +485,7 @@ void ChangeRemapPage(int direction)
     RefreshRemapPage();
 }
 
-constexpr std::array<int, kPcSettingRows> kPcMenuMaxima{{3, 1, 1, 1, 2, 1}};
+constexpr std::array<int, kPcSettingRows> kPcMenuMaxima{{3, 1, 1, 1, 2, 1, 3}};
 
 void InitializePcMenuValues()
 {
@@ -453,6 +499,7 @@ void InitializePcMenuValues()
         g_pc_vsync.load() ? 1 : 0,
         std::clamp(g_pc_aa.load(), 0, 2),
         g_keyboard_player.load() == 2 ? 1 : 0,
+        CurrentPathTracingMenuValue(),
     }};
     g_pc_setting_values_initialized = true;
 }
@@ -477,6 +524,7 @@ void AdjustPcMenuValue(int row, int direction)
         g_pc_vsync = g_pc_setting_values[3] != 0;
         g_pc_aa = g_pc_setting_values[4];
         g_keyboard_player = g_pc_setting_values[5] ? 2 : 1;
+        g_pc_path_tracing = g_pc_setting_values[6];
         REXLOG_INFO("Recomp menu changed row {} to {}", row, next);
     }
     SavePcSettings();
@@ -1111,7 +1159,8 @@ void StfrPrepareHelpOptions(uint32_t object, uint32_t labels, uint8_t* base)
             std::lock_guard lock(g_pc_setting_values_mutex);
             values = g_pc_setting_values;
         }
-        constexpr uint32_t first_ids[kPcSettingRows] = {5302, 5306, 5308, 5312, 5314, 5310};
+        constexpr uint32_t first_ids[kPcSettingRows] = {5302, 5306, 5308, 5312, 5314, 5310,
+                                                        5335};
         for (int i = 0; i < kPcSettingRows; ++i) {
             REX_STORE_U32(labels + i * 4, first_ids[i] + static_cast<uint32_t>(values[i]));
             REX_STORE_U8(object + 565 + i, 0);
@@ -1206,7 +1255,8 @@ uint32_t StfrResolveMenuDescription(uint8_t* base)
             "Frames shown per second. Game speed stays the same.",
             "Sync to the display. Off may tear but lowers latency.",
             "Choose an anti-aliasing mode.",
-            "Player 2 lets the keyboard play against a controller."
+            "Player 2 lets the keyboard play against a controller.",
+            "Path traced lighting: choose its denoiser, or Off."
         };
         description = descriptions[static_cast<size_t>(
             std::clamp(g_pc_selected_row.load(), 0, kPcSettingRows - 1))];
@@ -1281,6 +1331,15 @@ bool StfrResolveStringHook(PPCRegister& r3)
     uint8_t* base = g_guest_base.load();
     if (!base) return false;
     const uint32_t id = r3.u32;
+    // The scene's description table has fewer rows than Recompilation
+    // Settings: for its last row, it reads an id past the table's end.
+    if (g_recomp_settings_open.load() && g_pc_selected_row.load() == kPcSettingRows - 1 &&
+        id >= 0x10000) {
+        if (const uint32_t description = StfrResolveMenuDescription(base)) {
+            r3.u64 = description;
+            return true;
+        }
+    }
     if (const uint32_t replacement = StfrResolvePauseAchievementString(id, base)) {
         r3.u64 = replacement;
         return true;
@@ -1291,8 +1350,9 @@ bool StfrResolveStringHook(PPCRegister& r3)
             return true;
         }
     }
-    if (id >= 5274 && id <= 5334) {
-        if (id >= 5327) r3.u64 = GetRemapStringPointer(id, base);
+    if (id >= 5274 && id <= 5338) {
+        if (id >= 5335) r3.u64 = GetPathTracingStringPointer(id, base);
+        else if (id >= 5327) r3.u64 = GetRemapStringPointer(id, base);
         else if (id >= 5319) r3.u64 = GetAchievementStringPointer(id, base);
         else r3.u64 = GetRecompStringPointer(id, base);
         return true;
