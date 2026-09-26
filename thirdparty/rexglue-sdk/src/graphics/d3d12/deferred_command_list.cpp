@@ -276,7 +276,7 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
               *reinterpret_cast<const D3DBuildRaytracingAccelerationStructureArguments*>(stream);
           D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC desc = args.desc;
           if (args.has_geometry) {
-            desc.Inputs.pGeometryDescs = &args.geometry;
+            desc.Inputs.pGeometryDescs = args.geometry;
           }
           command_list_4->BuildRaytracingAccelerationStructure(&desc, 0, nullptr);
         }

@@ -1014,11 +1014,27 @@ void StfXblaApp::OnPostSetup()
     g_guest_base = runtime()->memory()->virtual_membase();
     g_achievement_kernel = runtime()->kernel_state();
     g_graphics_system = runtime()->graphics_system();
-    // Experimental path tracing (GPU plugin, registered by now): the scene's
-    // projection scales are in vertex shader constants c72.x and c73.y.
-    if (rex::cvar::GetFlagSource("path_tracing_projection_constant") ==
-        rex::cvar::Source::kDefault) {
-        rex::cvar::SetFlagByName("path_tracing_projection_constant", "72");
+    // Experimental path tracing (GPU plugin, registered by now). The scene's
+    // projection scales are in vertex shader constants c72.x and c73.y. Its
+    // surfaces are shaded by pixel shader EFB626 from a color table (row in
+    // interpolator 2), at the texture's (coordinates in interpolator 0)
+    // intensity scaled by the per-vertex lighting factor in r3.x - 1 gives
+    // the fully lit (unshaded) colors for the path tracer to light.
+    struct PathTracingDefault {
+        const char* name;
+        const char* value;
+    };
+    for (const PathTracingDefault& setting : {
+             PathTracingDefault{"path_tracing_projection_constant", "72"},
+             PathTracingDefault{"path_tracing_albedo_shader", "EFB626C62642D194"},
+             PathTracingDefault{"path_tracing_albedo_register", "3"},
+             PathTracingDefault{"path_tracing_material_uv_interpolator", "0"},
+             PathTracingDefault{"path_tracing_material_row_interpolator", "2"},
+             PathTracingDefault{"path_tracing_material_light_interpolator", "3"},
+         }) {
+        if (rex::cvar::GetFlagSource(setting.name) == rex::cvar::Source::kDefault) {
+            rex::cvar::SetFlagByName(setting.name, setting.value);
+        }
     }
     HMODULE gpu_plugin = GetModuleHandleW(L"rexgpu-xenos.dll");
     g_set_gpu_post_effect = gpu_plugin

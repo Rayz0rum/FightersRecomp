@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <memory>
 #include <optional>
@@ -90,6 +91,10 @@ class D3D12CommandProcessor : public CommandProcessor {
   // Whether guest pipelines should capture geometry for path tracing (the
   // path_tracing option is on and the device supports it).
   bool IsPathTracingEnabled() const { return pt_capture_buffer_ != nullptr; }
+  // Whether the draw should render unlit surface colors for the path tracer
+  // to light (path_tracing_albedo_shader).
+  bool IsPathTracingAlbedoDraw(const Shader& pixel_shader,
+                               reg::RB_DEPTHCONTROL normalized_depth_control);
 
   void SubmitBarriers();
 
@@ -568,8 +573,17 @@ class D3D12CommandProcessor : public CommandProcessor {
   bool InitializePathTracing();
   void ShutdownPathTracing();
   // Called for every draw after the pipeline and the viewport are known.
-  void UpdatePathTracingCapture(bool depth_tested_scene_draw,
+  void UpdatePathTracingCapture(const PrimitiveProcessor::ProcessingResult& primitive_processing,
+                                bool primitive_polygonal, bool rasterization_done,
+                                reg::RB_DEPTHCONTROL normalized_depth_control,
+                                const Shader* pixel_shader,
                                 const draw_util::ViewportInfo& viewport_info);
+  // Triangles written to the capture buffer by a draw while it's bound (its
+  // pipeline has stream output - see PipelineCache::CreateD3D12Pipeline).
+  static uint32_t PathTracingStreamOutTriangles(
+      const PrimitiveProcessor::ProcessingResult& primitive_processing, bool rasterization_done,
+      bool has_pixel_shader);
+  uint32_t PathTracingTextureSlot(const xenos::xe_gpu_texture_fetch_t& fetch);
   // Called once per presented guest frame from IssueSwap. Returns the texture
   // to present instead of the swap texture (with its SRV description), or
   // nullptr if the frame is presented as is.
@@ -587,30 +601,48 @@ class D3D12CommandProcessor : public CommandProcessor {
     kBuffer1,
     kRWBuffer0,
     kRWBuffer1,
+    kMaterials,
+    kAttributes,
+    kRWAttributes,
     kTexture0,
     kTexture1,
     kTexture2,
     kTexture3,
     kTexture4,
+    // t0 in space 2.
+    kTexture5,
     kRWTexture0,
     kRWTexture1,
+    // Unbounded, from the start of the view heap.
+    kMaterialTextures,
 
     kCount,
   };
   static constexpr uint32_t kPathTracingMaxTriangles = 1u << 17;
-  static constexpr uint32_t kPathTracingCaptureSize = kPathTracingMaxTriangles * 3 * 16;
-  static constexpr uint32_t kPathTracingVertexBufferSize = kPathTracingMaxTriangles * 3 * 12;
-  static constexpr uint32_t kPathTracingCountReadbackSlots = 8;
+  // Per vertex: clip space position, texture coordinates, color table row.
+  static constexpr uint32_t kPathTracingCaptureVertexSize = 32;
+  static constexpr uint32_t kPathTracingCaptureSize =
+      kPathTracingMaxTriangles * 3 * kPathTracingCaptureVertexSize;
+  // Per triangle: texture coordinates of the vertices, color table row, draw,
+  // the game's lighting factors of the vertices.
+  static constexpr uint32_t kPathTracingAttributeSize = 48;
+  static constexpr uint32_t kPathTracingMaxDraws = 4096;
+  static constexpr uint32_t kPathTracingMaxTextures = 256;
+  static constexpr uint32_t kPathTracingCounterSize = (kPathTracingMaxDraws + 1) * 8;
+  // Material header (80 bytes) and the draws (32 bytes each).
+  static constexpr uint32_t kPathTracingMaterialUploadSize = 80 + kPathTracingMaxDraws * 32;
+  // Two regions: solid triangles (opaque geometry of the acceleration
+  // structure) and alpha-tested ones.
+  static constexpr uint32_t kPathTracingVertexRegionSize = kPathTracingMaxTriangles * 3 * 12;
+  static constexpr uint32_t kPathTracingVertexBufferSize = kPathTracingVertexRegionSize * 2;
 
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_capture_buffer_;
-  // UINT64 BufferFilledSize of the capture buffer at offset 0.
+  // UINT64 BufferFilledSize per draw (each draw writes into its own region of
+  // the capture buffer, sized for the most triangles it can emit - geometry
+  // shaders drop some, like ones with NaN positions), and one more for draws
+  // beyond the maximum.
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_capture_counter_;
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_zero_upload_;
-  // Filled sizes of recent frames, to size the acceleration structure builds.
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_count_readback_;
-  const uint64_t* pt_count_readback_mapping_ = nullptr;
-  uint64_t pt_count_readback_submissions_[kPathTracingCountReadbackSlots] = {};
-  uint32_t pt_recent_triangles_ = 0;
   // View space triangles for the acceleration structure.
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_vertex_buffer_;
   // Per-frame statistics (ground normal, background color, average lighting)
@@ -624,9 +656,10 @@ class D3D12CommandProcessor : public CommandProcessor {
   Microsoft::WRL::ComPtr<ID3D12RootSignature> pt_root_signature_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_convert_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_primary_pipeline_;
-  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_albedo_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_lighting_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_denoise_pipeline_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_resolve_pipeline_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_bloom_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_composite_pipeline_;
   // Normal and view depth of the primary surface of every pixel.
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_gbuffer_;
@@ -635,6 +668,12 @@ class D3D12CommandProcessor : public CommandProcessor {
   // Traced lighting and the denoiser's intermediate.
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_lighting_;
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_lighting_temp_;
+  // Specular radiance (not multiplied by the surface color).
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_specular_;
+  // Exposed linear HDR color, and quarter resolution bloom (ping-pong).
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_hdr_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_bloom_a_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_bloom_b_;
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_output_;
   uint32_t pt_texture_width_ = 0;
   uint32_t pt_texture_height_ = 0;
@@ -655,7 +694,49 @@ class D3D12CommandProcessor : public CommandProcessor {
   // Projection scale of the first captured draw (guest clip xy = view xy *
   // this), from the vertex shader constants if configured.
   float pt_projection_[2] = {};
+  // Draws that wrote to the capture buffer this frame, in order.
+  struct PathTracingDraw {
+    uint32_t triangle_offset;
+    uint32_t triangle_count;
+    // Texture slots until uploaded, then the texture descriptor indices.
+    uint32_t texture;
+    uint32_t flags;
+    uint32_t palette;
+    // Alpha test: passes if texel alpha * scale - bias >= 0.
+    float alpha_scale;
+    float alpha_bias;
+    uint32_t padding;
+  };
+  enum PathTracingDrawFlags : uint32_t {
+    // Solid scene geometry.
+    kPathTracingDrawOpaque = 1 << 0,
+    // Blended scene geometry (effects, water).
+    kPathTracingDrawTransparent = 1 << 1,
+    // Shaded with the configured material model.
+    kPathTracingDrawMaterial = 1 << 2,
+    // The material's alpha test may discard parts of the triangles.
+    kPathTracingDrawAlphaTest = 1 << 3,
+  };
+  std::vector<PathTracingDraw> pt_draws_;
+  uint32_t pt_draw_triangles_ = 0;
+  std::vector<xenos::xe_gpu_texture_fetch_t> pt_texture_fetches_;
+  std::unordered_map<uint64_t, uint32_t> pt_texture_slots_;
+  // From the first material draw: the pixel shader constants c254, c255,
+  // c1, c0 of the material model (the alpha test and color table are per
+  // draw).
+  bool pt_material_found_ = false;
+  float pt_material_constants_[16] = {};
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_material_upload_;
+  uint8_t* pt_material_upload_mapping_ = nullptr;
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_attribute_buffer_;
   uint32_t pt_frame_ = 0;
+  // For the average frame time in the debug log.
+  std::chrono::steady_clock::time_point pt_frame_time_;
+  // Output area of the last path traced frame (resolution-scaled), to tell
+  // scene draws from ones into smaller viewports.
+  uint64_t pt_output_area_ = UINT64_MAX;
+  std::string pt_albedo_shader_text_;
+  uint64_t pt_albedo_shader_hash_ = 0;
 
   Microsoft::WRL::ComPtr<ID3D12Resource> gamma_ramp_buffer_;
   D3D12_RESOURCE_STATES gamma_ramp_buffer_state_;

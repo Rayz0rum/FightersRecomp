@@ -176,6 +176,10 @@ class DxbcShaderTranslator : public ShaderTranslator {
       uint32_t dynamic_addressable_register_count : 8;
       // Non-ROV - depth / stencil output mode.
       DepthStencilMode depth_stencil_mode : 2;
+      // Path tracing: overrides the register holding the lighting factor the
+      // game shades with (path_tracing_albedo_register) with a neutral value,
+      // so the surface colors are rendered unlit for relighting.
+      uint32_t path_tracing_albedo : 1;
     } pixel;
 
     explicit Modification(uint64_t modification_value = 0) : value(modification_value) {

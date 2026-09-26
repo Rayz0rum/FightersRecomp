@@ -3061,12 +3061,37 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
     state_desc.DepthStencilState.StencilEnable = FALSE;
   }
 
-  // Path tracing captures clip-space positions of rasterized geometry with
-  // stream output; the command processor binds a buffer only for draws it
-  // wants. Stream output is only valid when rasterization is kept.
-  static const D3D12_SO_DECLARATION_ENTRY kPathTracingSODeclaration[] = {
-      {0, "SV_Position", 0, 0, 4, 0}};
-  static const UINT kPathTracingSOStride = sizeof(float) * 4;
+  // Path tracing captures rasterized geometry with stream output; the
+  // command processor binds a buffer only while it wants it. Stream output
+  // is only valid when rasterization is kept. Per vertex: the clip space
+  // position, then the material attributes the path tracer shades with
+  // (texture coordinates, color table row, lighting factor), 32 bytes in
+  // total.
+  static const UINT kPathTracingSOStride = sizeof(float) * 8;
+  D3D12_SO_DECLARATION_ENTRY path_tracing_so_declaration[4];
+  UINT path_tracing_so_entry_count = 0;
+  {
+    uint32_t interpolator_mask =
+        DxbcShaderTranslator::Modification(runtime_description.vertex_shader->modification())
+            .vertex.interpolator_mask;
+    path_tracing_so_declaration[path_tracing_so_entry_count++] = {0, "SV_Position", 0, 0, 4,
+                                                                  0};
+    auto add_interpolator = [&](int32_t interpolator, BYTE component_count) {
+      D3D12_SO_DECLARATION_ENTRY& entry =
+          path_tracing_so_declaration[path_tracing_so_entry_count++];
+      entry = {0, nullptr, 0, 0, component_count, 0};
+      if (interpolator >= 0 && interpolator < int32_t(xenos::kMaxInterpolators) &&
+          (interpolator_mask & (UINT32_C(1) << interpolator))) {
+        // Output as TEXCOORD# of the used interpolators.
+        entry.SemanticName = "TEXCOORD";
+        entry.SemanticIndex =
+            rex::bit_count(interpolator_mask & ((UINT32_C(1) << interpolator) - 1));
+      }
+    };
+    add_interpolator(REXCVAR_GET(path_tracing_material_uv_interpolator), 2);
+    add_interpolator(REXCVAR_GET(path_tracing_material_row_interpolator), 1);
+    add_interpolator(REXCVAR_GET(path_tracing_material_light_interpolator), 1);
+  }
   bool path_tracing = command_processor_.IsPathTracingEnabled();
   if (path_tracing && description.cull_mode != PipelineCullMode::kDisableRasterization &&
       state_desc.PrimitiveTopologyType == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE &&
@@ -3089,12 +3114,14 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
     }
   }
   // All geometry shaders here emit triangles (point sprites, rectangles, quads
-  // and the pass-through above), whatever the input topology.
+  // and the pass-through above), whatever the input topology. Only capture
+  // from geometry shaders - stream output directly from the vertex shader
+  // isn't written on some drivers, and the command processor must know which
+  // draws write (D3D12CommandProcessor::PathTracingStreamOutTriangles).
   if (path_tracing && description.cull_mode != PipelineCullMode::kDisableRasterization &&
-      (state_desc.PrimitiveTopologyType == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE ||
-       state_desc.GS.pShaderBytecode)) {
-    state_desc.StreamOutput.pSODeclaration = kPathTracingSODeclaration;
-    state_desc.StreamOutput.NumEntries = UINT(rex::countof(kPathTracingSODeclaration));
+      state_desc.GS.pShaderBytecode) {
+    state_desc.StreamOutput.pSODeclaration = path_tracing_so_declaration;
+    state_desc.StreamOutput.NumEntries = path_tracing_so_entry_count;
     state_desc.StreamOutput.pBufferStrides = &kPathTracingSOStride;
     state_desc.StreamOutput.NumStrides = 1;
     state_desc.StreamOutput.RasterizedStream = 0;

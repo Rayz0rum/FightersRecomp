@@ -18,6 +18,7 @@
 
 #include <rex/assert.h>
 #include <rex/cvar.h>
+#include <rex/graphics/flags.h>
 #include <rex/graphics/pipeline/shader/dxbc.h>
 #include <rex/graphics/pipeline/shader/dxbc_translator.h>
 #include <rex/graphics/xenos.h>
@@ -637,6 +638,21 @@ void DxbcShaderTranslator::StartPixelShader() {
                  ? dxbc::Src::V1D(in_reg_ps_interpolators_ +
                                   rex::bit_count(interpolator_mask & ((UINT32_C(1) << i) - 1)))
                  : dxbc::Src::LF(0.0f));
+  }
+
+  // Path tracing albedo rendering - the lighting factor replaced with a
+  // neutral one.
+  if (shader_modification.pixel.path_tracing_albedo) {
+    int32_t albedo_register = REXCVAR_GET(path_tracing_albedo_register);
+    int32_t albedo_component = REXCVAR_GET(path_tracing_albedo_component);
+    if (albedo_register >= 0 && uint32_t(albedo_register) < register_count() &&
+        albedo_component >= 0 && albedo_component < 4) {
+      uint32_t albedo_mask = UINT32_C(1) << albedo_component;
+      a_.OpMov(uses_register_dynamic_addressing
+                   ? dxbc::Dest::X(0, uint32_t(albedo_register), albedo_mask)
+                   : dxbc::Dest::R(uint32_t(albedo_register), albedo_mask),
+               dxbc::Src::LF(float(REXCVAR_GET(path_tracing_albedo_value))));
+    }
   }
 
   // Write the pixel parameters to the specified interpolator register

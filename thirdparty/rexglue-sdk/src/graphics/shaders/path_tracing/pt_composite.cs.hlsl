@@ -1,27 +1,31 @@
-// Applies the denoised path-traced lighting to the frame, with auto exposure
-// keeping the average brightness near the original's.
+// Tone maps the path traced HDR color with bloom into the final frame.
 //
 // The lighting is applied to the scene as it was before the HUD was drawn
-// (pt_color), and the change is added to the final frame (pt_final_frame) where it
-// shows the scene, so the HUD keeps its colors. Without the scene image, both
-// are the final frame.
+// (pt_color), and the change is added to the final frame (pt_final_frame)
+// where it shows the scene, so the HUD keeps its colors. Without the scene
+// image, both are the final frame.
 
 #include "pt_common.hlsli"
 
-RWByteAddressBuffer pt_stats : register(u1);
+// Header of the material buffer: float at 64 - bloom strength.
+ByteAddressBuffer pt_materials : register(t7);
 Texture2D<float4> pt_color : register(t2);
 Texture2D<float4> pt_gbuffer : register(t3);
-Texture2D<float4> pt_lighting : register(t4);
+// Exposed linear HDR color, alpha - whether lit by the path tracer.
+Texture2D<float4> pt_hdr : register(t4);
 Texture2D<float4> pt_final_frame : register(t5);
-// The scene with the game's own shadows filled in.
 Texture2D<float4> pt_albedo : register(t6);
+// Quarter resolution bloom of the scene.
+Texture2D<float4> pt_bloom : register(t0, space2);
+SamplerState pt_sampler_linear_clamp : register(s0);
 RWTexture2D<float4> pt_output : register(u3);
 
-// Keeps some detail in the highlights instead of clipping.
-float3 PTShoulder(float3 color) {
-  const float knee = 0.8;
-  float3 over = max(color - knee, 0.0);
-  return min(color, knee) + over / (1.0 + over * (1.0 / (1.0 - knee)));
+float3 PTLinear(float3 color) { return pow(max(color, 0.0), 2.2); }
+float3 PTEncode(float3 color) { return pow(saturate(color), 1.0 / 2.2); }
+
+// Narkowicz's ACES filmic curve fit.
+float3 PTToneMap(float3 color) {
+  return saturate((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14));
 }
 
 [numthreads(8, 8, 1)]
@@ -36,35 +40,44 @@ void main(uint3 id : SV_DispatchThreadID) {
     float3 scene = pt_color[pixel].rgb;
     // Where the HUD covers the scene.
     float3 difference = abs(frame.rgb - scene);
-    float hud = saturate((max(max(difference.r, difference.g), difference.b) - 0.03) * 16.0);
-    if (surface.w > 0.0) {
-      uint2 average = pt_stats.Load2(pt_stats_slot * kPTStatsSlotSize + 32);
-      float average_luminance =
-          average.y != 0 ? float(average.x) / (256.0 * float(average.y)) : 1.0;
-      float exposure = clamp(pt_exposure_target / max(average_luminance, 1.0e-3), 0.75, 2.0);
-      float3 lighting = pt_lighting[pixel].rgb * exposure;
-      if (pt_debug_view == 1) {
-        frame.rgb = lighting * 0.5;
-      } else if (pt_debug_view == 2) {
-        frame.rgb = surface.xyz * 0.5 + 0.5;
-      } else if (pt_debug_view == 3) {
+    float hud = saturate((max(max(difference.r, difference.g), difference.b) - 0.02) * 40.0);
+    float4 hdr = pt_hdr[pixel];
+    uint2 rect_size = pt_rect_max - pt_rect_min;
+    float2 bloom_uv =
+        (float2(pixel - int2(pt_rect_min)) + 0.5) / (float2((rect_size + 3) / 4) * 4.0);
+    float3 bloom =
+        pt_bloom.SampleLevel(pt_sampler_linear_clamp, bloom_uv, 0.0).rgb *
+        asfloat(pt_materials.Load(64));
+    float3 result = scene;
+    if (pt_debug_view == 1) {
+      result = PTEncode(PTToneMap(hdr.rgb));
+    } else if (pt_debug_view == 2) {
+      result = surface.w > 0.0 ? surface.xyz * 0.5 + 0.5 : float3(0.0, 0.0, 0.0);
+    } else if (pt_debug_view == 3) {
+      if (surface.w > 0.0) {
         float4 right = pt_gbuffer[min(pixel + int2(1, 0), int2(pt_rect_max) - 1)];
         float4 below = pt_gbuffer[min(pixel + int2(0, 1), int2(pt_rect_max) - 1)];
         if (abs(right.w - surface.w) > 0.03 * surface.w ||
             abs(below.w - surface.w) > 0.03 * surface.w) {
-          frame.rgb = float3(1.0, 0.0, 1.0);
+          result = float3(1.0, 0.0, 1.0);
         }
-        frame.rgb = lerp(frame.rgb, float3(0.0, 1.0, 0.0), hud * 0.5);
-      } else if (pt_debug_view == 5) {
-        frame.rgb = pt_albedo[pixel].rgb;
-      } else if (pt_debug_view != 4 || uint(pixel.x) * 2 >= pt_rect_min.x + pt_rect_max.x) {
-        // 4 - the left half of the scene without path tracing, for comparison.
-        float3 relit = PTShoulder(pt_albedo[pixel].rgb *
-                                  lerp(float3(1.0, 1.0, 1.0), lighting, pt_strength));
-        frame.rgb += (relit - scene) * (1.0 - hud);
       }
-    } else if (pt_debug_view == 1 || pt_debug_view == 2) {
-      frame.rgb = float3(0.0, 0.0, 0.0);
+      result = lerp(result, float3(0.0, 1.0, 0.0), hud * 0.5);
+    } else if (pt_debug_view >= 5) {
+      result = pt_albedo[pixel].rgb;
+    } else if (pt_debug_view != 4 || uint(pixel.x) * 2 >= pt_rect_min.x + pt_rect_max.x) {
+      // 4 - the left half of the scene unlit, for comparison.
+      if (hdr.a > 0.0) {
+        result = lerp(pt_albedo[pixel].rgb, PTEncode(PTToneMap(hdr.rgb + bloom)), pt_strength);
+      } else {
+        // The background (sky) keeps its look, with the glow of the scene.
+        result = PTEncode(PTLinear(scene) + bloom * pt_strength);
+      }
+    }
+    if (pt_debug_view != 0 && pt_debug_view != 4) {
+      frame.rgb = result;
+    } else {
+      frame.rgb += (result - scene) * (1.0 - hud);
     }
   }
   // The gamma ramp is looked up with the value, like the unorm frame had.

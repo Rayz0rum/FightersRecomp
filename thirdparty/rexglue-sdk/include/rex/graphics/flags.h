@@ -17,6 +17,13 @@
 REXCVAR_DECLARE(bool, guest_vblank_uncapped);
 REXCVAR_DECLARE(uint32_t, guest_present_interval);
 REXCVAR_DECLARE(bool, path_tracing);
+REXCVAR_DECLARE(std::string, path_tracing_albedo_shader);
+REXCVAR_DECLARE(int32_t, path_tracing_albedo_register);
+REXCVAR_DECLARE(int32_t, path_tracing_albedo_component);
+REXCVAR_DECLARE(double, path_tracing_albedo_value);
+REXCVAR_DECLARE(int32_t, path_tracing_material_uv_interpolator);
+REXCVAR_DECLARE(int32_t, path_tracing_material_row_interpolator);
+REXCVAR_DECLARE(int32_t, path_tracing_material_light_interpolator);
 REXCVAR_DECLARE(bool, clear_memory_page_state);
 REXCVAR_DECLARE(bool, half_pixel_offset);
 REXCVAR_DECLARE(bool, async_shader_compilation);

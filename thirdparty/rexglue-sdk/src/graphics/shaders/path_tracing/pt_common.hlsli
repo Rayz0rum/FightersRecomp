@@ -39,7 +39,8 @@ cbuffer PTConstants : register(b0) {
   float pt_sun_softness;
   uint pt_ray_count;
   uint pt_debug_view;
-  uint pt_frame;
+  // Specular reflection strength (0 disables the reflection rays).
+  float pt_specular;
   // Denoiser pass: distance between taps and taps each side.
   uint pt_filter_step;
   float pt_bounce_scale;
@@ -53,7 +54,8 @@ cbuffer PTConstants : register(b0) {
   // Surfaces further away are scenery (sky, clouds, distant landscape) and
   // are left as they are, like the background.
   float pt_max_distance;
-  float pt_padding;
+  // GGX roughness of the surfaces.
+  float pt_roughness;
 };
 
 // pt_flags.

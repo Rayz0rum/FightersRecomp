@@ -2391,6 +2391,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
           ? pipeline_cache_->GetCurrentPixelShaderModification(
                 *pixel_shader, interpolator_mask, ps_param_gen_pos, normalized_depth_control)
           : DxbcShaderTranslator::Modification(0);
+  if (pixel_shader && IsPathTracingAlbedoDraw(*pixel_shader, normalized_depth_control)) {
+    pixel_shader_modification.pixel.path_tracing_albedo = 1;
+  }
 
   // Set up the render targets - this may perform dispatches and draws.
   uint32_t normalized_color_mask =
@@ -2650,13 +2653,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   // Must not call anything that may change the primitive topology from now on!
 
   if (pt_capture_buffer_) {
-    // Only solid scene geometry: depth-tested (not HUD or backgrounds) and
-    // depth-writing (not particles and other transparent effects).
-    UpdatePathTracingCapture(primitive_polygonal && pixel_shader != nullptr &&
-                                 !primitive_processing_result.IsTessellated() &&
-                                 normalized_depth_control.z_enable &&
-                                 normalized_depth_control.z_write_enable,
-                             viewport_info);
+    UpdatePathTracingCapture(primitive_processing_result, primitive_polygonal,
+                             is_rasterization_done,
+                             normalized_depth_control, pixel_shader, viewport_info);
     // The scene resolved after the capture is then usually drawn into the
     // final image, before the HUD.
     if (pt_capture_done_this_frame_ && !pt_scene_fetch_valid_ && pt_scene_address_) {
@@ -2928,6 +2927,11 @@ bool D3D12CommandProcessor::IssueCopy() {
   if (pt_captured_this_frame_ && !pt_capture_done_this_frame_) {
     pt_capture_done_this_frame_ = true;
     pt_scene_address_ = register_file_->values[XE_GPU_REG_RB_COPY_DEST_BASE];
+    // Nothing else is captured this frame.
+    if (pt_capture_bound_) {
+      deferred_command_list_.D3DSOSetTarget(nullptr);
+      pt_capture_bound_ = false;
+    }
   }
   if (!BeginSubmission(true)) {
     return false;

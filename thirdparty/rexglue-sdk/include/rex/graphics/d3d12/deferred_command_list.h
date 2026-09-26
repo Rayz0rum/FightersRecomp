@@ -137,7 +137,7 @@ class DeferredCommandList {
   }
 
   // Needs ID3D12GraphicsCommandList4 - skipped if unsupported. For a bottom
-  // level build, the geometry is copied (at most one description).
+  // level build, the geometry is copied (at most two descriptions).
   void D3DBuildRaytracingAccelerationStructure(
       const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC& desc) {
     auto& args = *reinterpret_cast<D3DBuildRaytracingAccelerationStructureArguments*>(
@@ -148,10 +148,11 @@ class DeferredCommandList {
                             D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL &&
                         desc.Inputs.NumDescs != 0;
     if (args.has_geometry) {
-      assert_true(desc.Inputs.NumDescs == 1 &&
-                  desc.Inputs.DescsLayout == D3D12_ELEMENTS_LAYOUT_ARRAY);
-      args.geometry = desc.Inputs.pGeometryDescs[0];
-      args.desc.Inputs.NumDescs = 1;
+      assert_true(desc.Inputs.DescsLayout == D3D12_ELEMENTS_LAYOUT_ARRAY);
+      args.desc.Inputs.NumDescs = std::min(desc.Inputs.NumDescs, UINT(2));
+      for (UINT i = 0; i < args.desc.Inputs.NumDescs; ++i) {
+        args.geometry[i] = desc.Inputs.pGeometryDescs[i];
+      }
     }
   }
 
@@ -594,7 +595,7 @@ class DeferredCommandList {
 
   struct D3DBuildRaytracingAccelerationStructureArguments {
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC desc;
-    D3D12_RAYTRACING_GEOMETRY_DESC geometry;
+    D3D12_RAYTRACING_GEOMETRY_DESC geometry[2];
     bool has_geometry;
   };
 
