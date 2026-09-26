@@ -9,6 +9,7 @@
 
 // Header of the material buffer: float at 64 - bloom strength.
 ByteAddressBuffer pt_materials : register(t7);
+RWByteAddressBuffer pt_stats : register(u1);
 // Output pixels.
 Texture2D<float4> pt_color : register(t0, space3);
 Texture2D<float4> pt_final_frame : register(t1, space3);
@@ -41,8 +42,11 @@ void main(uint3 id : SV_DispatchThreadID) {
   if (PTInRect(local)) {
     float4 surface = pt_gbuffer[local];
     float3 scene = pt_color[pixel].rgb;
-    // Where the HUD covers the scene.
-    float3 difference = abs(frame.rgb - scene);
+    // The scene as the game drew it into the frame (tinted by fades), and
+    // where the HUD covers it.
+    float3 tint = asfloat(pt_stats.Load3(kPTStatsTintOffset));
+    float3 expected = scene * tint;
+    float3 difference = abs(frame.rgb - expected);
     float hud = saturate((max(max(difference.r, difference.g), difference.b) - 0.02) * 40.0);
     float4 hdr = pt_hdr[local];
     uint2 rect_size = PTRectSize();
@@ -79,7 +83,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     if (pt_debug_view != 0 && pt_debug_view != 4) {
       frame.rgb = result;
     } else {
-      frame.rgb += (result - scene) * (1.0 - hud);
+      frame.rgb += (result * tint - expected) * (1.0 - hud);
     }
   }
   // The gamma ramp is looked up with the value, like the unorm frame had.

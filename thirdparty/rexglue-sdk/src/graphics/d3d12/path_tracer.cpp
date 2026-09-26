@@ -154,6 +154,7 @@ namespace shaders {
 #include "../shaders/bytecode/d3d12_6_5/pt_sun_cs.h"
 #include "../shaders/bytecode/d3d12_6_5/pt_resolve_cs.h"
 #include "../shaders/bytecode/d3d12_6_5/pt_temporal_cs.h"
+#include "../shaders/bytecode/d3d12_6_5/pt_tint_cs.h"
 }  // namespace shaders
 
 namespace {
@@ -613,6 +614,7 @@ bool D3D12CommandProcessor::InitializePathTracing() {
       {pt_compose_pipeline_, shaders::pt_compose_cs, sizeof(shaders::pt_compose_cs)},
       {pt_resolve_pipeline_, shaders::pt_resolve_cs, sizeof(shaders::pt_resolve_cs)},
       {pt_bloom_pipeline_, shaders::pt_bloom_cs, sizeof(shaders::pt_bloom_cs)},
+      {pt_tint_pipeline_, shaders::pt_tint_cs, sizeof(shaders::pt_tint_cs)},
       {pt_composite_pipeline_, shaders::pt_composite_cs, sizeof(shaders::pt_composite_cs)},
   };
   for (PipelineInfo& pipeline_info : pipelines) {
@@ -690,6 +692,7 @@ void D3D12CommandProcessor::ShutdownPathTracing() {
   pt_sun_readback_.Reset();
   pt_sky_map_.Reset();
   pt_sky_pipeline_.Reset();
+  pt_tint_pipeline_.Reset();
   pt_composite_pipeline_.Reset();
   pt_denoise_pipeline_.Reset();
   pt_compose_pipeline_.Reset();
@@ -2008,6 +2011,14 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
     ok = ok && set_pass({tex(bloom_passes[i][0])}, {tex(bloom_passes[i][1])});
     deferred_command_list_.D3DDispatch(bloom_groups_x, bloom_groups_y, 1);
   }
+
+  // The tint the game draws the scene with (fades).
+  PushUAVBarrier(pt_stats_buffer_.Get());
+  ok = ok && set_pass({scene, frame}, {});
+  SetExternalPipeline(pt_tint_pipeline_.Get());
+  SubmitBarriers();
+  deferred_command_list_.D3DDispatch(1, 1, 1);
+  PushUAVBarrier(pt_stats_buffer_.Get());
 
   // Tone mapping into the whole output.
   set_constants();

@@ -760,6 +760,7 @@ class D3D12CommandProcessor : public CommandProcessor {
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_composite_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_compose_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_sky_pipeline_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_tint_pipeline_;
   // The sky around the scene by world direction (octahedral, see pt_sky).
   static constexpr uint32_t kPathTracingSkyMapSize = 32;
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_sky_map_;

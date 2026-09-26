@@ -118,9 +118,11 @@ bool PTSplitSignals() {
 // From +160, per frame slot:
 // +0 float4 - direction of the game's light in world space, and how well it
 // explains the game's lighting (0 if not found yet).
+// +192 float3 - the tint the game draws the scene into the frame with.
 static const uint kPTStatsSlotSize = 64;
 static const uint kPTStatsSkyOffset = 128;
 static const uint kPTStatsSunOffset = 160;
+static const uint kPTStatsTintOffset = 192;
 static const float kPTStatsScale = 4096.0;
 
 static const float3 kPTLuminance = float3(0.2126, 0.7152, 0.0722);

@@ -563,6 +563,8 @@ bool D3D12CommandProcessor::PathTracingDenoiseNRD(const PathTracingDenoiseInputs
   for (uint32_t i = 0; i < 3; ++i) {
     sigma.lightDirection[i] = inputs.sun_direction_world[i];
   }
+  // Steadier shadow edges (one shadow ray per pixel).
+  sigma.maxStabilizedFrameNum = nrd::SIGMA_MAX_HISTORY_FRAME_NUM;
   if (state.nrd_set_denoiser_settings(*state.nrd_instance, kNRDReblur, &reblur) !=
           nrd::Result::SUCCESS ||
       state.nrd_set_denoiser_settings(*state.nrd_instance, kNRDSigma, &sigma) !=
