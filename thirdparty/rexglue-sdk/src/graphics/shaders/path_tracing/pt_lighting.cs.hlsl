@@ -34,6 +34,9 @@ Texture2D<float4> pt_specular_albedo : register(t2, space3);
 Texture2D<float4> pt_sky_map : register(t3, space3);
 // World normal, roughness (w).
 Texture2D<float4> pt_normal_roughness : register(t4, space3);
+// The previous frame's exposed HDR color and surfaces, for the radiance cache.
+Texture2D<float4> pt_previous_hdr : register(t5, space3);
+Texture2D<float4> pt_previous_gbuffer : register(t6, space3);
 // Total irradiance / total specular, or indirect diffuse / indirect specular /
 // sun visibility (NRD penumbra or FSR occluder distance, the occluder
 // distance, visibility).
@@ -56,12 +59,48 @@ float3 PTSky(float3 sky, float3 up, float3 direction) {
   return lerp(average, color, learned.a);
 }
 
-// Light a hit surface reflects towards the ray: the sun if it reaches it, and
-// the sky (roughly half of it visible), times its material color.
+// The light leaving a surface point as the previous frame's result shows it
+// (all bounces, denoised), if the point was visible there - w is whether.
+float4 PTCachedRadiance(float3 hit, float3 hit_normal) {
+  if (!(pt_flags & kPTFlagRadianceCache) || !(pt_flags & kPTFlagCameraTracked) ||
+      !pt_history_valid) {
+    return float4(0.0, 0.0, 0.0, 0.0);
+  }
+  float3 previous = PTViewToPreviousView(hit);
+  if (previous.z <= 1.0e-3) {
+    return float4(0.0, 0.0, 0.0, 0.0);
+  }
+  int2 previous_local = int2(floor(PTProjectToPixel(previous))) - int2(pt_rect_min);
+  if (!PTInRect(previous_local)) {
+    return float4(0.0, 0.0, 0.0, 0.0);
+  }
+  float4 previous_surface = pt_previous_gbuffer[previous_local];
+  float4 previous_hdr = pt_previous_hdr[previous_local];
+  // The same surface: depth and orientation (normals rotated into the
+  // previous view).
+  float3 previous_normal = float3(dot(pt_view_to_previous_view[0].xyz, hit_normal),
+                                  dot(pt_view_to_previous_view[1].xyz, hit_normal),
+                                  dot(pt_view_to_previous_view[2].xyz, hit_normal));
+  float exposure = asfloat(pt_stats.Load(kPTStatsExposureOffset + (pt_stats_slot ^ 1) * 4));
+  if (previous_surface.w <= 0.0 || previous_hdr.a <= 0.0 || !(exposure > 0.0) ||
+      abs(previous_surface.w - previous.z) > 0.03 * previous.z + 1.0e-3 ||
+      dot(previous_surface.xyz, previous_normal) < 0.8) {
+    return float4(0.0, 0.0, 0.0, 0.0);
+  }
+  return float4(min(previous_hdr.rgb / exposure, 64.0), 1.0);
+}
+
+// Light a hit surface reflects towards the ray: from the radiance cache, or
+// the sun if it reaches it and the sky (roughly half of it visible), times
+// its material color.
 float3 PTHitRadiance(float3 origin, float3 direction, float t, uint primitive, float2 barycentrics,
                      float3 sky, float3 up, float3 sun, bool materials) {
   float3 hit = origin + direction * t;
   float3 hit_normal = PTTriangleNormal(pt_vertices, primitive, -direction);
+  float4 cached = PTCachedRadiance(hit, hit_normal);
+  if (cached.w > 0.0) {
+    return cached.rgb;
+  }
   float3 albedo = float3(0.35, 0.35, 0.35);
   PTSurface hit_material;
   hit_material.valid = false;

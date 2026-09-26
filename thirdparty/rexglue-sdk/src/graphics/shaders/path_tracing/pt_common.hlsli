@@ -95,6 +95,9 @@ static const uint kPTFlagCameraTracked = 1u << 2;
 // The game renders its surfaces with the lighting factor overridden (unlit
 // colors in the frame) rather than lit.
 static const uint kPTFlagAlbedoRendering = 1u << 3;
+// Light bounced off surfaces seen in the previous frame is taken from its
+// result (multiple bounces, already denoised).
+static const uint kPTFlagRadianceCache = 1u << 4;
 
 // pt_denoiser.
 static const uint kPTDenoiserBuiltin = 0;
@@ -121,10 +124,12 @@ bool PTSplitSignals() {
 // +0 float4 - direction of the game's light in world space, and how well it
 // explains the game's lighting (0 if not found yet).
 // +192 float3 - the tint the game draws the scene into the frame with.
+// +208, per frame slot: float - the exposure of the frame's HDR color.
 static const uint kPTStatsSlotSize = 64;
 static const uint kPTStatsSkyOffset = 128;
 static const uint kPTStatsSunOffset = 160;
 static const uint kPTStatsTintOffset = 192;
+static const uint kPTStatsExposureOffset = 208;
 static const float kPTStatsScale = 4096.0;
 
 static const float3 kPTLuminance = float3(0.2126, 0.7152, 0.0722);

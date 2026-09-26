@@ -42,6 +42,9 @@ void main(uint3 id : SV_DispatchThreadID) {
     float average_irradiance =
         average.y != 0 ? float(average.x) / (32.0 * float(average.y)) : 1.0;
     float exposure = clamp(pt_exposure_target / max(average_irradiance, 1.0e-3), 0.25, 4.0);
+    if (all(id.xy == 0)) {
+      pt_stats.Store(kPTStatsExposureOffset + pt_stats_slot * 4, asuint(exposure));
+    }
     float3 albedo = PTLinear(pt_albedo[local].rgb);
     float3 color;
     if (pt_denoiser == kPTDenoiserDLSSRR) {

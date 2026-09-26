@@ -79,6 +79,9 @@ REXCVAR_DEFINE_DOUBLE(path_tracing_gi_distance, 100.0, "GPU/Path Tracing",
                       "Maximum distance of global illumination rays in view space units");
 REXCVAR_DEFINE_DOUBLE(path_tracing_bounce, 1.0, "GPU/Path Tracing",
                       "Strength of the light bounced off surfaces");
+REXCVAR_DEFINE_BOOL(path_tracing_radiance_cache, true, "GPU/Path Tracing",
+                    "Take the light bounced off surfaces seen in the previous frame from its "
+                    "result (multiple bounces, less noise)");
 REXCVAR_DEFINE_DOUBLE(path_tracing_sky, 1.0, "GPU/Path Tracing",
                       "Strength of the sky light (colored like the frame's background)");
 REXCVAR_DEFINE_DOUBLE(path_tracing_sky_saturation, 0.6, "GPU/Path Tracing",
@@ -1608,7 +1611,8 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   constants.flags = (REXCVAR_GET(path_tracing_replace_game_shadows) ? 1u << 0 : 0u) |
                     (REXCVAR_GET(path_tracing_game_sun) ? 1u << 1 : 0u) |
                     (camera_tracked ? 1u << 2 : 0u) |
-                    (REXCVAR_GET(path_tracing_albedo_override) ? 1u << 3 : 0u);
+                    (REXCVAR_GET(path_tracing_albedo_override) ? 1u << 3 : 0u) |
+                    (REXCVAR_GET(path_tracing_radiance_cache) ? 1u << 4 : 0u);
   constants.sky_saturation =
       std::clamp(float(REXCVAR_GET(path_tracing_sky_saturation)), 0.0f, 1.0f);
   constants.max_distance = std::max(float(REXCVAR_GET(path_tracing_max_distance)), 1.0e-2f);
@@ -1847,7 +1851,8 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   // Lighting (this frame's samples).
   PushUAVBarrier(pt_stats_buffer_.Get());
   ok = ok && set_pass({scene, tex(gbuffer_texture), tex(PathTracingTexture::kSpecularAlbedo),
-                       {pt_sky_map_.Get(), nullptr}, tex(PathTracingTexture::kNormalRoughness)},
+                       {pt_sky_map_.Get(), nullptr}, tex(PathTracingTexture::kNormalRoughness),
+                       tex(PathTracingTexture::kHDR), tex(previous_gbuffer_texture)},
                       {tex(PathTracingTexture::kLighting), tex(PathTracingTexture::kSpecular),
                        tex(PathTracingTexture::kShadow)});
   SetExternalPipeline(pt_lighting_pipeline_.Get());
