@@ -473,6 +473,33 @@ bool SharedMemory::RequestRange(uint32_t start, uint32_t length) {
   return RequestRanges(&range, 1);
 }
 
+bool SharedMemory::IsRangeValid(uint32_t start, uint32_t length) {
+  if (length == 0 || start >= kBufferSize) {
+    return true;
+  }
+  length = std::min(length, kBufferSize - start);
+  uint32_t page_first = start >> page_size_log2_;
+  uint32_t page_last = (start + length - 1) >> page_size_log2_;
+  uint32_t block_first = page_first >> 6;
+  uint32_t block_last = page_last >> 6;
+
+  auto global_lock = global_critical_region_.Acquire();
+
+  for (uint32_t i = block_first; i <= block_last; ++i) {
+    uint64_t check_bits = UINT64_MAX;
+    if (i == block_first) {
+      check_bits &= ~((uint64_t(1) << (page_first & 63)) - 1);
+    }
+    if (i == block_last && (page_last & 63) != 63) {
+      check_bits &= (uint64_t(1) << ((page_last & 63) + 1)) - 1;
+    }
+    if ((system_page_flags_valid_[i] & check_bits) != check_bits) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::pair<uint32_t, uint32_t> SharedMemory::MemoryInvalidationCallbackThunk(
     void* context_ptr, uint32_t physical_address_start, uint32_t length, bool exact_range) {
   return reinterpret_cast<SharedMemory*>(context_ptr)

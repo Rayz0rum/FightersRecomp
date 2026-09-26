@@ -226,7 +226,12 @@ class TextureCache {
     bool mips_outdated(const std::unique_lock<std::recursive_mutex>& global_lock) const {
       return mips_outdated_;
     }
-    void MakeUpToDateAndWatch(const std::unique_lock<std::recursive_mutex>& global_lock);
+    // Marks the base and/or the mips just loaded from the shared memory as up
+    // to date and watches their memory. Returns false, leaving the data
+    // outdated to be loaded again, if the CPU has written to the memory since
+    // it was uploaded to the shared memory.
+    bool MakeUpToDateAndWatch(const std::unique_lock<std::recursive_mutex>& global_lock,
+                              bool base, bool mips);
 
     void WatchCallback(const std::unique_lock<std::recursive_mutex>& global_lock, bool is_mip);
 
