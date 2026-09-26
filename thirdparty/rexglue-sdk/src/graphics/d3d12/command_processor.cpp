@@ -47,6 +47,11 @@ REXCVAR_DEFINE_BOOL(d3d12_submit_on_primary_buffer_end, true, "GPU/D3D12",
                     "Submit command list when PM4 primary buffer ends")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+REXCVAR_DEFINE_BOOL(path_tracing, false, "GPU/Path Tracing",
+                    "Experimental: path-traced lighting over the game's own shading, from "
+                    "geometry captured with stream output (D3D12 only).")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 namespace rex::graphics::d3d12 {
 
 // Generated with `xb buildshaders`.
@@ -309,7 +314,9 @@ ID3D12RootSignature* D3D12CommandProcessor::GetRootSignature(const DxbcShader* v
   desc.pParameters = parameters;
   desc.NumStaticSamplers = 0;
   desc.pStaticSamplers = nullptr;
-  desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+  // Guest pipelines carry a stream output declaration for path tracing.
+  desc.Flags = REXCVAR_GET(path_tracing) ? D3D12_ROOT_SIGNATURE_FLAG_ALLOW_STREAM_OUTPUT
+                                         : D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
   // Base parameters.
 
@@ -995,7 +1002,9 @@ bool D3D12CommandProcessor::SetupContext() {
     root_signature_bindless_desc.pParameters = root_parameters_bindless;
     root_signature_bindless_desc.NumStaticSamplers = 0;
     root_signature_bindless_desc.pStaticSamplers = nullptr;
-    root_signature_bindless_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+    root_signature_bindless_desc.Flags = REXCVAR_GET(path_tracing)
+                                             ? D3D12_ROOT_SIGNATURE_FLAG_ALLOW_STREAM_OUTPUT
+                                             : D3D12_ROOT_SIGNATURE_FLAG_NONE;
     // Fetch constants.
     {
       auto& parameter = root_parameters_bindless[kRootParameter_Bindless_FetchConstants];
@@ -1620,6 +1629,10 @@ bool D3D12CommandProcessor::SetupContext() {
 
   occlusion_query_resources_available_ = InitializeOcclusionQueryResources();
 
+  if (REXCVAR_GET(path_tracing) && !InitializePathTracing()) {
+    REXGPU_WARN("Path tracing is unavailable on this device");
+  }
+
   // Just not to expose uninitialized memory.
   std::memset(&system_constants_, 0, sizeof(system_constants_));
 
@@ -1630,6 +1643,7 @@ void D3D12CommandProcessor::ShutdownContext() {
   AwaitAllQueueOperationsCompletion();
   InvalidateAllVertexBufferResidency();
   ShutdownOcclusionQueryResources();
+  ShutdownPathTracing();
 
   ui::d3d12::util::ReleaseAndNull(readback_buffer_);
   readback_buffer_size_ = 0;
@@ -1926,6 +1940,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
     REXGPU_ERROR(
         "IssueSwap: RequestSwapTexture failed - fetch0: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
         fetch.dword_0, fetch.dword_1, fetch.dword_2, fetch.dword_3, fetch.dword_4, fetch.dword_5);
+    PathTracingFrameEnd();
     return;
   }
   D3D12_RESOURCE_DESC swap_texture_desc = swap_texture_resource->GetDesc();
@@ -1988,9 +2003,19 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
   // Frame rate cap: the guest still renders and advances every frame, only the
   // hand-off to the host is skipped. The frame must still end, as below.
   if (!ShouldPresentGuestSwap()) {
+    PathTracingFrameEnd();
     EndSubmission(true);
     return;
   }
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC path_tracing_srv_desc;
+  if (ID3D12Resource* path_tracing_output =
+          PathTracingRender(swap_texture_resource, swap_texture_srv_desc, guest_output_width,
+                            guest_output_height, path_tracing_srv_desc)) {
+    swap_texture_resource = path_tracing_output;
+    swap_texture_srv_desc = path_tracing_srv_desc;
+  }
+  PathTracingFrameEnd();
 
   presenter->RefreshGuestOutput(
       guest_output_width, guest_output_height, display_width, display_height,
@@ -2624,6 +2649,25 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   SetPrimitiveTopology(primitive_topology);
   // Must not call anything that may change the primitive topology from now on!
 
+  if (pt_capture_buffer_) {
+    // Only solid scene geometry: depth-tested (not HUD or backgrounds) and
+    // depth-writing (not particles and other transparent effects).
+    UpdatePathTracingCapture(primitive_polygonal && pixel_shader != nullptr &&
+                                 !primitive_processing_result.IsTessellated() &&
+                                 normalized_depth_control.z_enable &&
+                                 normalized_depth_control.z_write_enable,
+                             viewport_info);
+    // The scene resolved after the capture is then usually drawn into the
+    // final image, before the HUD.
+    if (pt_capture_done_this_frame_ && !pt_scene_fetch_valid_ && pt_scene_address_) {
+      xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(0);
+      if ((fetch.base_address << 12) == pt_scene_address_) {
+        pt_scene_fetch_ = fetch;
+        pt_scene_fetch_valid_ = true;
+      }
+    }
+  }
+
   // Draw.
   if (primitive_processing_result.index_buffer_type ==
       PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
@@ -2881,6 +2925,10 @@ bool D3D12CommandProcessor::IssueCopy() {
 #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
+  if (pt_captured_this_frame_ && !pt_capture_done_this_frame_) {
+    pt_capture_done_this_frame_ = true;
+    pt_scene_address_ = register_file_->values[XE_GPU_REG_RB_COPY_DEST_BASE];
+  }
   if (!BeginSubmission(true)) {
     return false;
   }
@@ -3316,6 +3364,7 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
     ff_blend_factor_update_needed_ = true;
     ff_stencil_ref_update_needed_ = true;
     viewport_cache_valid_ = false;
+    pt_capture_bound_ = false;
     current_guest_pipeline_ = nullptr;
     current_external_pipeline_ = nullptr;
     current_graphics_root_signature_ = nullptr;

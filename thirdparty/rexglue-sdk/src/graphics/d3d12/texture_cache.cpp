@@ -1369,8 +1369,15 @@ ID3D12Resource* D3D12TextureCache::RequestSwapTexture(D3D12_SHADER_RESOURCE_VIEW
                                                       xenos::TextureFormat& format_out,
                                                       uint32_t* width_unscaled_out,
                                                       uint32_t* height_unscaled_out) {
-  const auto& regs = register_file();
-  xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(0);
+  return RequestTexture(register_file().GetTextureFetch(0), srv_desc_out, format_out,
+                        width_unscaled_out, height_unscaled_out);
+}
+
+ID3D12Resource* D3D12TextureCache::RequestTexture(const xenos::xe_gpu_texture_fetch_t& fetch,
+                                                  D3D12_SHADER_RESOURCE_VIEW_DESC& srv_desc_out,
+                                                  xenos::TextureFormat& format_out,
+                                                  uint32_t* width_unscaled_out,
+                                                  uint32_t* height_unscaled_out) {
   TextureKey key;
   BindingInfoFromFetchConstant(fetch, key, nullptr);
   if (!key.is_valid || key.base_page == 0 || key.dimension != xenos::DataDimension::k2DOrStacked) {
@@ -1381,9 +1388,9 @@ ID3D12Resource* D3D12TextureCache::RequestSwapTexture(D3D12_SHADER_RESOURCE_VIEW
     return nullptr;
   }
   texture->MarkAsUsed();
-  // The swap texture is likely to be used only for the presentation compute
-  // shader, and not during emulation, where it'd be NON_PIXEL_SHADER_RESOURCE |
-  // PIXEL_SHADER_RESOURCE.
+  // Textures requested here are likely to be used only by the presentation
+  // compute shaders, and not during emulation, where it'd be
+  // NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE.
   ID3D12Resource* texture_resource = texture->resource();
   command_processor_.PushTransitionBarrier(
       texture_resource, texture->SetResourceState(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),

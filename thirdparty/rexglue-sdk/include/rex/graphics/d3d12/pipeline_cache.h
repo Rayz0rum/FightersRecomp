@@ -249,6 +249,9 @@ class PipelineCache {
       uint32_t has_point_coordinates : 1;
       // PA_CL_CLIP_CNTL::ps_ucp_mode for point primitives.
       uint32_t point_ps_ucp_mode : 2;
+      // Emits each input triangle unchanged. Only used so that stream output
+      // for path tracing comes from a geometry shader (type is ignored).
+      uint32_t path_tracing_passthrough : 1;
     };
 
     GeometryShaderKey() : key(0) { static_assert_size(*this, sizeof(key)); }
@@ -289,6 +292,11 @@ class PipelineCache {
                                    GeometryShaderKey& key_out);
   static void CreateDxbcGeometryShader(GeometryShaderKey key, std::vector<uint32_t>& shader_out);
   const std::vector<uint32_t>& GetGeometryShader(GeometryShaderKey key);
+  // Thread-safe, for pipeline creation threads.
+  const std::vector<uint32_t>& GetPathTracingGeometryShader(GeometryShaderKey key);
+  std::mutex path_tracing_geometry_shaders_mutex_;
+  std::unordered_map<GeometryShaderKey, std::vector<uint32_t>, GeometryShaderKey::Hasher>
+      path_tracing_geometry_shaders_;
 
   ID3D12PipelineState* CreateD3D12Pipeline(const PipelineRuntimeDescription& runtime_description);
   bool PrepareRuntimeDescriptionForQueuedCreation(Pipeline* pipeline,

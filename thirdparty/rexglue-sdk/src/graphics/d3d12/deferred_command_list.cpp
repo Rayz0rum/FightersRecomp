@@ -36,6 +36,9 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
   const uintmax_t* stream = command_stream_.data();
   size_t stream_remaining = command_stream_.size();
   ID3D12PipelineState* current_pipeline_state = nullptr;
+  // Queried on first use - only needed for ray tracing.
+  Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> command_list_4;
+  bool command_list_4_queried = false;
   while (stream_remaining != 0) {
     const CommandHeader& header = *reinterpret_cast<const CommandHeader*>(stream);
     stream += kCommandHeaderSizeElements;
@@ -121,6 +124,10 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
       case Command::kD3DIASetPrimitiveTopology: {
         command_list->IASetPrimitiveTopology(
             *reinterpret_cast<const D3D12_PRIMITIVE_TOPOLOGY*>(stream));
+      } break;
+      case Command::kD3DSOSetTarget: {
+        auto& args = *reinterpret_cast<const D3DSOSetTargetArguments*>(stream);
+        command_list->SOSetTargets(0, 1, args.bound ? &args.view : nullptr);
       } break;
       case Command::kD3DIASetVertexBuffers: {
         static_assert(alignof(D3D12_VERTEX_BUFFER_VIEW) <= alignof(uintmax_t));
@@ -258,6 +265,21 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         const char* label_name = reinterpret_cast<const char*>(
             reinterpret_cast<const uint8_t*>(stream) + sizeof(DebugMarkerHeader));
         command_list->BeginEvent(1, label_name, static_cast<UINT>(args.label_length + 1));
+      } break;
+      case Command::kD3DBuildRaytracingAccelerationStructure: {
+        if (!command_list_4_queried) {
+          command_list_4_queried = true;
+          command_list->QueryInterface(IID_PPV_ARGS(&command_list_4));
+        }
+        if (command_list_4) {
+          auto& args =
+              *reinterpret_cast<const D3DBuildRaytracingAccelerationStructureArguments*>(stream);
+          D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC desc = args.desc;
+          if (args.has_geometry) {
+            desc.Inputs.pGeometryDescs = &args.geometry;
+          }
+          command_list_4->BuildRaytracingAccelerationStructure(&desc, 0, nullptr);
+        }
       } break;
       case Command::kEndDebugMarker: {
         command_list->EndEvent();

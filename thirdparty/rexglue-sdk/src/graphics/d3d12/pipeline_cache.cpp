@@ -2134,7 +2134,12 @@ void PipelineCache::CreateDxbcGeometryShader(GeometryShaderKey key,
   uint32_t input_primitive_vertex_count = 0;
   dxbc::PrimitiveTopology output_primitive_topology = dxbc::PrimitiveTopology::kUndefined;
   uint32_t max_output_vertex_count = 0;
-  switch (key.type) {
+  if (key.path_tracing_passthrough) {
+    input_primitive = dxbc::Primitive::kTriangle;
+    input_primitive_vertex_count = 3;
+    output_primitive_topology = dxbc::PrimitiveTopology::kTriangleStrip;
+    max_output_vertex_count = 3;
+  } else switch (key.type) {
     case PipelineGeometryShader::kPointList:
       // Point to a strip of 2 triangles.
       input_primitive = dxbc::Primitive::kPoint;
@@ -2265,7 +2270,26 @@ void PipelineCache::CreateDxbcGeometryShader(GeometryShaderKey key,
     }
   }
 
-  switch (key.type) {
+  if (key.path_tracing_passthrough) {
+    for (uint32_t i = 0; i < 3; ++i) {
+      for (uint32_t j = 0; j < key.interpolator_count; ++j) {
+        a.OpMov(dxbc::Dest::O(output_register_interpolators + j),
+                dxbc::Src::V2D(i, input_register_interpolators + j));
+      }
+      if (key.has_point_coordinates) {
+        a.OpMov(dxbc::Dest::O(output_register_point_coordinates, 0b0011), dxbc::Src::LF(0.0f));
+      }
+      a.OpMov(dxbc::Dest::O(output_register_position), dxbc::Src::V2D(i, input_register_position));
+      for (uint32_t j = 0; j < input_clip_distance_count; j += 4) {
+        a.OpMov(dxbc::Dest::O(
+                    output_register_clip_distances + (j >> 2),
+                    (UINT32_C(1) << std::min(input_clip_distance_count - j, UINT32_C(4))) - 1),
+                dxbc::Src::V2D(i, input_register_clip_and_cull_distances + (j >> 2)));
+      }
+      a.OpEmitStream(stream);
+    }
+    a.OpCutStream(stream);
+  } else switch (key.type) {
     case PipelineGeometryShader::kPointList: {
       // Expand the point sprite, with left-to-right, top-to-bottom UVs.
       dxbc::Src point_size_src(dxbc::Src::CB(
@@ -2665,6 +2689,17 @@ void PipelineCache::CreateDxbcGeometryShader(GeometryShaderKey key,
   }
 }
 
+const std::vector<uint32_t>& PipelineCache::GetPathTracingGeometryShader(GeometryShaderKey key) {
+  std::lock_guard<std::mutex> lock(path_tracing_geometry_shaders_mutex_);
+  auto it = path_tracing_geometry_shaders_.find(key);
+  if (it != path_tracing_geometry_shaders_.end()) {
+    return it->second;
+  }
+  std::vector<uint32_t> shader;
+  CreateDxbcGeometryShader(key, shader);
+  return path_tracing_geometry_shaders_.emplace(key, std::move(shader)).first->second;
+}
+
 const std::vector<uint32_t>& PipelineCache::GetGeometryShader(GeometryShaderKey key) {
   auto it = geometry_shaders_.find(key);
   if (it != geometry_shaders_.end()) {
@@ -3026,10 +3061,55 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
     state_desc.DepthStencilState.StencilEnable = FALSE;
   }
 
+  // Path tracing captures clip-space positions of rasterized geometry with
+  // stream output; the command processor binds a buffer only for draws it
+  // wants. Stream output is only valid when rasterization is kept.
+  static const D3D12_SO_DECLARATION_ENTRY kPathTracingSODeclaration[] = {
+      {0, "SV_Position", 0, 0, 4, 0}};
+  static const UINT kPathTracingSOStride = sizeof(float) * 4;
+  bool path_tracing = command_processor_.IsPathTracingEnabled();
+  if (path_tracing && description.cull_mode != PipelineCullMode::kDisableRasterization &&
+      state_desc.PrimitiveTopologyType == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE &&
+      !state_desc.GS.pShaderBytecode && !state_desc.HS.pShaderBytecode &&
+      runtime_description.pixel_shader != nullptr) {
+    // Stream output doesn't take effect directly from the vertex shader on
+    // some drivers, while it does from a geometry shader, so pass triangles
+    // through one.
+    GeometryShaderKey passthrough_key;
+    if (GetGeometryShaderKey(PipelineGeometryShader::kRectangleList,
+                             DxbcShaderTranslator::Modification(
+                                 runtime_description.vertex_shader->modification()),
+                             DxbcShaderTranslator::Modification(
+                                 runtime_description.pixel_shader->modification()),
+                             passthrough_key)) {
+      passthrough_key.path_tracing_passthrough = 1;
+      const std::vector<uint32_t>& gs = GetPathTracingGeometryShader(passthrough_key);
+      state_desc.GS.pShaderBytecode = gs.data();
+      state_desc.GS.BytecodeLength = gs.size() * sizeof(uint32_t);
+    }
+  }
+  // All geometry shaders here emit triangles (point sprites, rectangles, quads
+  // and the pass-through above), whatever the input topology.
+  if (path_tracing && description.cull_mode != PipelineCullMode::kDisableRasterization &&
+      (state_desc.PrimitiveTopologyType == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE ||
+       state_desc.GS.pShaderBytecode)) {
+    state_desc.StreamOutput.pSODeclaration = kPathTracingSODeclaration;
+    state_desc.StreamOutput.NumEntries = UINT(rex::countof(kPathTracingSODeclaration));
+    state_desc.StreamOutput.pBufferStrides = &kPathTracingSOStride;
+    state_desc.StreamOutput.NumStrides = 1;
+    state_desc.StreamOutput.RasterizedStream = 0;
+  }
+
   // Create the D3D12 pipeline state object.
   ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
   ID3D12PipelineState* state;
-  if (FAILED(device->CreateGraphicsPipelineState(&state_desc, IID_PPV_ARGS(&state)))) {
+  HRESULT create_result = device->CreateGraphicsPipelineState(&state_desc, IID_PPV_ARGS(&state));
+  if (FAILED(create_result) && state_desc.StreamOutput.NumEntries) {
+    REXGPU_WARN("Pipeline rejected path tracing stream output, creating it without");
+    state_desc.StreamOutput = {};
+    create_result = device->CreateGraphicsPipelineState(&state_desc, IID_PPV_ARGS(&state));
+  }
+  if (FAILED(create_result)) {
     if (runtime_description.pixel_shader != nullptr) {
       REXGPU_ERROR("Failed to create graphics pipeline with VS {:016X}, PS {:016X}",
                    runtime_description.vertex_shader->shader().ucode_data_hash(),

@@ -86,6 +86,11 @@ class D3D12CommandProcessor : public CommandProcessor {
                              UINT subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES);
   void PushAliasingBarrier(ID3D12Resource* old_resource, ID3D12Resource* new_resource);
   void PushUAVBarrier(ID3D12Resource* resource);
+
+  // Whether guest pipelines should capture geometry for path tracing (the
+  // path_tracing option is on and the device supports it).
+  bool IsPathTracingEnabled() const { return pt_capture_buffer_ != nullptr; }
+
   void SubmitBarriers();
 
   // Finds or creates root signature for a pipeline.
@@ -556,6 +561,102 @@ class D3D12CommandProcessor : public CommandProcessor {
   // as R10G10B10X2 with swizzle).
   // Bytes 0x400...0x9FF - 128-entry PWL R16G16 gamma ramp (R - base, G - delta,
   // low 6 bits of each are zero, 3 elements per entry).
+  // Experimental path tracing (path_tracer.cpp). Positions of rasterized
+  // triangles are captured with stream output during the frame, turned into a
+  // ray tracing acceleration structure at swap time, and traced to add
+  // occlusion, sun shadows and bounce light to the frame.
+  bool InitializePathTracing();
+  void ShutdownPathTracing();
+  // Called for every draw after the pipeline and the viewport are known.
+  void UpdatePathTracingCapture(bool depth_tested_scene_draw,
+                                const draw_util::ViewportInfo& viewport_info);
+  // Called once per presented guest frame from IssueSwap. Returns the texture
+  // to present instead of the swap texture (with its SRV description), or
+  // nullptr if the frame is presented as is.
+  ID3D12Resource* PathTracingRender(ID3D12Resource* swap_texture,
+                                    const D3D12_SHADER_RESOURCE_VIEW_DESC& swap_texture_srv_desc,
+                                    uint32_t width, uint32_t height,
+                                    D3D12_SHADER_RESOURCE_VIEW_DESC& srv_desc_out);
+  // Called once per guest frame from IssueSwap, after PathTracingRender.
+  void PathTracingFrameEnd();
+  bool EnsurePathTracingTextures(uint32_t width, uint32_t height);
+
+  enum class PathTracingRootParameter : UINT {
+    kConstants,
+    kBuffer0,
+    kBuffer1,
+    kRWBuffer0,
+    kRWBuffer1,
+    kTexture0,
+    kTexture1,
+    kTexture2,
+    kTexture3,
+    kTexture4,
+    kRWTexture0,
+    kRWTexture1,
+
+    kCount,
+  };
+  static constexpr uint32_t kPathTracingMaxTriangles = 1u << 17;
+  static constexpr uint32_t kPathTracingCaptureSize = kPathTracingMaxTriangles * 3 * 16;
+  static constexpr uint32_t kPathTracingVertexBufferSize = kPathTracingMaxTriangles * 3 * 12;
+  static constexpr uint32_t kPathTracingCountReadbackSlots = 8;
+
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_capture_buffer_;
+  // UINT64 BufferFilledSize of the capture buffer at offset 0.
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_capture_counter_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_zero_upload_;
+  // Filled sizes of recent frames, to size the acceleration structure builds.
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_count_readback_;
+  const uint64_t* pt_count_readback_mapping_ = nullptr;
+  uint64_t pt_count_readback_submissions_[kPathTracingCountReadbackSlots] = {};
+  uint32_t pt_recent_triangles_ = 0;
+  // View space triangles for the acceleration structure.
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_vertex_buffer_;
+  // Per-frame statistics (ground normal, background color, average lighting)
+  // for 2 frames, see pt_common.hlsli.
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_stats_buffer_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_blas_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_tlas_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_scratch_;
+  uint64_t pt_tlas_scratch_offset_ = 0;
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_instance_upload_;
+  Microsoft::WRL::ComPtr<ID3D12RootSignature> pt_root_signature_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_convert_pipeline_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_primary_pipeline_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_albedo_pipeline_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_lighting_pipeline_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_denoise_pipeline_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_composite_pipeline_;
+  // Normal and view depth of the primary surface of every pixel.
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_gbuffer_;
+  // Surface colors (the scene without the game's own shadows).
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_albedo_;
+  // Traced lighting and the denoiser's intermediate.
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_lighting_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_lighting_temp_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_output_;
+  uint32_t pt_texture_width_ = 0;
+  uint32_t pt_texture_height_ = 0;
+  // Textures replaced while possibly still in use by the GPU.
+  std::vector<std::pair<uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>>> pt_retired_textures_;
+  bool pt_capture_bound_ = false;
+  // Games using predicated tiling redraw the scene for every EDRAM tile; the
+  // first tile's pass has every polygon once. Capture depth-tested draws with
+  // the viewport of the first one until the next resolve.
+  bool pt_captured_this_frame_ = false;
+  bool pt_capture_done_this_frame_ = false;
+  draw_util::ViewportInfo pt_viewport_;
+  // The scene without the HUD: where the capture pass was resolved to, and the
+  // fetch constant of the texture later drawn from there.
+  uint32_t pt_scene_address_ = 0;
+  xenos::xe_gpu_texture_fetch_t pt_scene_fetch_;
+  bool pt_scene_fetch_valid_ = false;
+  // Projection scale of the first captured draw (guest clip xy = view xy *
+  // this), from the vertex shader constants if configured.
+  float pt_projection_[2] = {};
+  uint32_t pt_frame_ = 0;
+
   Microsoft::WRL::ComPtr<ID3D12Resource> gamma_ramp_buffer_;
   D3D12_RESOURCE_STATES gamma_ramp_buffer_state_;
   // Upload buffer for an image that is the same as gamma_ramp_, but with

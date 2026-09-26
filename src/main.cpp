@@ -1014,6 +1014,12 @@ void StfXblaApp::OnPostSetup()
     g_guest_base = runtime()->memory()->virtual_membase();
     g_achievement_kernel = runtime()->kernel_state();
     g_graphics_system = runtime()->graphics_system();
+    // Experimental path tracing (GPU plugin, registered by now): the scene's
+    // projection scales are in vertex shader constants c72.x and c73.y.
+    if (rex::cvar::GetFlagSource("path_tracing_projection_constant") ==
+        rex::cvar::Source::kDefault) {
+        rex::cvar::SetFlagByName("path_tracing_projection_constant", "72");
+    }
     HMODULE gpu_plugin = GetModuleHandleW(L"rexgpu-xenos.dll");
     g_set_gpu_post_effect = gpu_plugin
         ? reinterpret_cast<SetGpuPostEffect>(GetProcAddress(gpu_plugin, "stfr_set_gpu_post_effect"))

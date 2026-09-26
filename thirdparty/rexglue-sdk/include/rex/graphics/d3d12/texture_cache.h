@@ -161,6 +161,13 @@ class D3D12TextureCache final : public TextureCache {
                                      xenos::TextureFormat& format_out,
                                      uint32_t* width_unscaled_out = nullptr,
                                      uint32_t* height_unscaled_out = nullptr);
+  // Same as RequestSwapTexture, but for a 2D texture described by a fetch
+  // constant saved earlier.
+  ID3D12Resource* RequestTexture(const xenos::xe_gpu_texture_fetch_t& fetch,
+                                 D3D12_SHADER_RESOURCE_VIEW_DESC& srv_desc_out,
+                                 xenos::TextureFormat& format_out,
+                                 uint32_t* width_unscaled_out = nullptr,
+                                 uint32_t* height_unscaled_out = nullptr);
 
  protected:
   bool IsSignedVersionSeparateForFormat(TextureKey key) const override;

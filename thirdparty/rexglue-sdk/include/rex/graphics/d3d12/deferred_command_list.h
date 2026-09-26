@@ -136,6 +136,25 @@ class DeferredCommandList {
     }
   }
 
+  // Needs ID3D12GraphicsCommandList4 - skipped if unsupported. For a bottom
+  // level build, the geometry is copied (at most one description).
+  void D3DBuildRaytracingAccelerationStructure(
+      const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC& desc) {
+    auto& args = *reinterpret_cast<D3DBuildRaytracingAccelerationStructureArguments*>(
+        WriteCommand(Command::kD3DBuildRaytracingAccelerationStructure,
+                     sizeof(D3DBuildRaytracingAccelerationStructureArguments)));
+    args.desc = desc;
+    args.has_geometry = desc.Inputs.Type ==
+                            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL &&
+                        desc.Inputs.NumDescs != 0;
+    if (args.has_geometry) {
+      assert_true(desc.Inputs.NumDescs == 1 &&
+                  desc.Inputs.DescsLayout == D3D12_ELEMENTS_LAYOUT_ARRAY);
+      args.geometry = desc.Inputs.pGeometryDescs[0];
+      args.desc.Inputs.NumDescs = 1;
+    }
+  }
+
   void D3DDispatch(UINT thread_group_count_x, UINT thread_group_count_y,
                    UINT thread_group_count_z) {
     auto& args = *reinterpret_cast<D3DDispatchArguments*>(
@@ -214,6 +233,16 @@ class DeferredCommandList {
     auto& arg = *reinterpret_cast<D3D12_PRIMITIVE_TOPOLOGY*>(
         WriteCommand(Command::kD3DIASetPrimitiveTopology, sizeof(D3D12_PRIMITIVE_TOPOLOGY)));
     arg = primitive_topology;
+  }
+
+  // Binds one stream output buffer to slot 0, or unbinds it if view is null.
+  void D3DSOSetTarget(const D3D12_STREAM_OUTPUT_BUFFER_VIEW* view) {
+    auto& args = *reinterpret_cast<D3DSOSetTargetArguments*>(
+        WriteCommand(Command::kD3DSOSetTarget, sizeof(D3DSOSetTargetArguments)));
+    args.bound = view != nullptr;
+    if (view) {
+      args.view = *view;
+    }
   }
 
   void D3DIASetVertexBuffers(UINT start_slot, UINT num_views,
@@ -460,6 +489,7 @@ class DeferredCommandList {
     kD3DCopyResource,
     kCopyTexture,
     kD3DCopyTextureRegion,
+    kD3DBuildRaytracingAccelerationStructure,
     kD3DDispatch,
     kD3DDrawIndexedInstanced,
     kD3DDrawInstanced,
@@ -469,6 +499,7 @@ class DeferredCommandList {
     kD3DIASetIndexBuffer,
     kD3DIASetPrimitiveTopology,
     kD3DIASetVertexBuffers,
+    kD3DSOSetTarget,
     kD3DOMSetBlendFactor,
     kD3DOMSetRenderTargets,
     kD3DOMSetStencilRef,
@@ -494,6 +525,11 @@ class DeferredCommandList {
     kBeginDebugMarker,
     kEndDebugMarker,
     kInsertDebugMarker,
+  };
+
+  struct D3DSOSetTargetArguments {
+    D3D12_STREAM_OUTPUT_BUFFER_VIEW view;
+    bool bound;
   };
 
   struct CommandHeader {
@@ -554,6 +590,12 @@ class DeferredCommandList {
     D3D12_TEXTURE_COPY_LOCATION src;
     D3D12_BOX src_box;
     bool has_src_box;
+  };
+
+  struct D3DBuildRaytracingAccelerationStructureArguments {
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC desc;
+    D3D12_RAYTRACING_GEOMETRY_DESC geometry;
+    bool has_geometry;
   };
 
   struct D3DDispatchArguments {
