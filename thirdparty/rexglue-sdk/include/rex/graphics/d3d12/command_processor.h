@@ -869,6 +869,8 @@ class D3D12CommandProcessor : public CommandProcessor {
     kPathTracingDrawMaterial = 1 << 2,
     // The material's alpha test may discard parts of the triangles.
     kPathTracingDrawAlphaTest = 1 << 3,
+    // Moves on its own (characters, props - see UpdatePathTracingCamera).
+    kPathTracingDrawDynamic = 1 << 4,
   };
   std::vector<PathTracingDraw> pt_draws_;
   // Identify draws across frames (texture, color table, size, flags).
@@ -895,6 +897,8 @@ class D3D12CommandProcessor : public CommandProcessor {
   // (otherwise the world space restarts, and so do the histories).
   bool pt_camera_tracked_ = false;
   bool pt_camera_tracked_initialized_ = false;
+  // Draws (by key) seen moving on their own, and the frame when last.
+  std::unordered_map<uint64_t, uint32_t> pt_dynamic_draw_frames_;
   uint32_t pt_camera_draws_agreeing_ = 0;
   uint32_t pt_world_resets_ = 0;
   uint32_t pt_draw_triangles_ = 0;

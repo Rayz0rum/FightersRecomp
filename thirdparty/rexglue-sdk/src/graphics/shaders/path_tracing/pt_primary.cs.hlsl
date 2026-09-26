@@ -97,6 +97,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     float3 world_normal = float3(0.0, 1.0, 0.0);
     float view_depth = kPTBackgroundDepth;
     float3 specular_albedo = float3(0.04, 0.04, 0.04);
+    float roughness = pt_roughness;
     if (PTTraceClosest(pt_scene, float3(0.0, 0.0, 0.0), direction, 1.0e-3, pt_max_distance, t,
                        primitive, barycentrics)) {
       float3 normal = PTTriangleNormal(pt_vertices, primitive, -direction);
@@ -104,6 +105,7 @@ void main(uint3 id : SV_DispatchThreadID) {
       result = float4(normal, t);
       view_depth = t;
       world_normal = PTViewToWorld(normal);
+      roughness = PTTriangleRoughness(primitive);
       float3 position = direction * t;
 
       // Motion.
@@ -157,7 +159,7 @@ void main(uint3 id : SV_DispatchThreadID) {
           }
         }
       }
-      float alpha = pt_roughness * pt_roughness;
+      float alpha = roughness * roughness;
       specular_albedo =
           PTSpecularAlbedo(float3(0.04, 0.04, 0.04), alpha, dot(normal, -normalize(direction)));
     } else {
@@ -170,11 +172,11 @@ void main(uint3 id : SV_DispatchThreadID) {
     pt_motion_out[local] = motion;
     pt_view_depth_out[local] = view_depth;
     pt_nrd_normal_roughness_out[local] =
-        NRD_FrontEnd_PackNormalAndRoughness(world_normal, pt_roughness, 0.0);
+        NRD_FrontEnd_PackNormalAndRoughness(world_normal, roughness, 0.0);
     pt_world_motion_out[local] = world_motion;
     pt_screen_motion_out[local] = screen_motion;
-    pt_normal_roughness_out[local] = float4(world_normal, pt_roughness);
-    pt_octahedral_normal_out[local] = float4(PTNormalToOctahedron(world_normal), pt_roughness, 0.0);
+    pt_normal_roughness_out[local] = float4(world_normal, roughness);
+    pt_octahedral_normal_out[local] = float4(PTNormalToOctahedron(world_normal), roughness, 0.0);
     pt_diffuse_albedo_out[local] = float4(PTLinear(albedo), 1.0);
     pt_specular_albedo_out[local] = float4(specular_albedo, 1.0);
   }

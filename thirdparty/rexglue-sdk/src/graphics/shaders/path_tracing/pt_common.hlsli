@@ -73,7 +73,9 @@ cbuffer PTConstants : register(b0) {
   uint pt_denoiser;
   // The world space restarted this frame (the camera couldn't be tracked).
   uint pt_world_reset;
-  uint2 pt_padding0;
+  // GGX linear roughness of the characters and other moving objects.
+  float pt_dynamic_roughness;
+  uint pt_padding0;
   // Rows of the view to world rotation (xyz).
   float4 pt_view_to_world[3];
   // Rows of the transform from this frame's view space to the previous

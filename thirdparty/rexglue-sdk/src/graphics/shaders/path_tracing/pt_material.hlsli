@@ -30,10 +30,22 @@ static const uint kPTDrawOpaque = 1u << 0;
 static const uint kPTDrawTransparent = 1u << 1;
 static const uint kPTDrawMaterial = 1u << 2;
 static const uint kPTDrawAlphaTest = 1u << 3;
+// Moves on its own (characters, props).
+static const uint kPTDrawDynamic = 1u << 4;
 // Offset of the alpha-tested triangles in the vertex buffer.
 static const uint kPTVertexRegionSize = 131072 * 3 * 12;
 
 bool PTMaterialsValid() { return pt_materials.Load(72) != 0; }
+
+// GGX linear roughness of a triangle's surface.
+float PTTriangleRoughness(uint triangle_index) {
+  uint draw_index = pt_attributes.Load(triangle_index * 48 + 28);
+  if (draw_index != 0xFFFFFFFFu &&
+      (pt_materials.Load(80 + draw_index * 32 + 12) & kPTDrawDynamic)) {
+    return pt_dynamic_roughness;
+  }
+  return pt_roughness;
+}
 
 uint4 PTDraw(uint draw_index) {
   return pt_materials.Load4(kPTMaterialDrawsOffset + draw_index * 32);

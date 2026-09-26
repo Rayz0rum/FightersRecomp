@@ -32,6 +32,8 @@ Texture2D<float4> pt_gbuffer : register(t1, space3);
 Texture2D<float4> pt_specular_albedo : register(t2, space3);
 // The sky around the scene by world direction (octahedral, see pt_sky).
 Texture2D<float4> pt_sky_map : register(t3, space3);
+// World normal, roughness (w).
+Texture2D<float4> pt_normal_roughness : register(t4, space3);
 // Total irradiance / total specular, or indirect diffuse / indirect specular /
 // sun visibility (NRD penumbra or FSR occluder distance, the occluder
 // distance, visibility).
@@ -127,7 +129,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     float3 origin = position + normal * bias;
     float3 view = -normalize(position);
     float n_dot_v = max(dot(normal, view), 1.0e-3);
-    float alpha = pt_roughness * pt_roughness;
+    float roughness = pt_normal_roughness[local].w;
+    float alpha = roughness * roughness;
     float alpha2 = alpha * alpha;
     bool materials = PTMaterialsValid();
     uint ray_count = max(pt_ray_count, 1u);
@@ -255,7 +258,7 @@ void main(uint3 id : SV_DispatchThreadID) {
         specular = REBLUR_FrontEnd_PackRadianceAndNormHitDist(
             demodulated_reflection,
             REBLUR_FrontEnd_GetNormHitDist(reflection_distance, surface.w, hit_parameters,
-                                           pt_roughness),
+                                           roughness),
             true);
       } else {
         lighting = float4(indirect, hit_distance);
@@ -263,7 +266,7 @@ void main(uint3 id : SV_DispatchThreadID) {
       }
     } else {
       float highlight =
-          PTSpecularHighlight(normal, view, sun, pt_roughness) * sun_visibility * pt_specular;
+          PTSpecularHighlight(normal, view, sun, roughness) * sun_visibility * pt_specular;
       lighting = float4(total_irradiance, 1.0);
       specular = float4(min(pt_sun_color * highlight + reflection * pt_specular, 64.0), 1.0);
     }

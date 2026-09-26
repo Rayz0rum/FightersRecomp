@@ -105,9 +105,12 @@ REXCVAR_DEFINE_DOUBLE(path_tracing_sun_softness, 0.04, "GPU/Path Tracing",
 REXCVAR_DEFINE_DOUBLE(path_tracing_specular, 0.6, "GPU/Path Tracing",
                       "Strength of specular reflections (sun highlights and ray traced "
                       "reflections, 0 to disable)");
-REXCVAR_DEFINE_DOUBLE(path_tracing_roughness, 0.4, "GPU/Path Tracing",
-                      "Roughness of the surfaces for specular reflections (0.02 - mirror, 1 - "
+REXCVAR_DEFINE_DOUBLE(path_tracing_roughness, 0.45, "GPU/Path Tracing",
+                      "Roughness of the scenery for specular reflections (0.02 - mirror, 1 - "
                       "matte)");
+REXCVAR_DEFINE_DOUBLE(path_tracing_character_roughness, 0.28, "GPU/Path Tracing",
+                      "Roughness of the characters and other moving objects (found by their "
+                      "motion)");
 REXCVAR_DEFINE_DOUBLE(path_tracing_bloom, 0.06, "GPU/Path Tracing",
                       "Strength of the glow around bright areas");
 REXCVAR_DEFINE_DOUBLE(path_tracing_bloom_threshold, 1.4, "GPU/Path Tracing",
@@ -196,7 +199,8 @@ struct PathTracingConstants {
   float specular_temporal_alpha;
   uint32_t denoiser;
   uint32_t world_reset;
-  uint32_t padding0[2];
+  float dynamic_roughness;
+  uint32_t padding0;
   // Rows (xyz, w - translation).
   float view_to_world[12];
   float view_to_previous_view[12];
@@ -1001,6 +1005,7 @@ void D3D12CommandProcessor::UpdatePathTracingCamera() {
     size_t first;
     size_t count;
     double depth;
+    size_t draw;
   };
   std::vector<DrawPairs> draws;
   std::vector<double> current, previous;
@@ -1016,7 +1021,7 @@ void D3D12CommandProcessor::UpdatePathTracingCamera() {
     if (count < 3 || count != previous_count) {
       continue;
     }
-    DrawPairs pairs = {current.size() / 3, count, 0.0};
+    DrawPairs pairs = {current.size() / 3, count, 0.0, i};
     for (uint32_t j = 0; j < count * 3; ++j) {
       current.push_back(pt_draw_samples_[size_t(first) * 3 + j]);
       previous.push_back(pt_previous_draw_samples_[size_t(previous_first) * 3 + j]);
@@ -1087,6 +1092,26 @@ void D3D12CommandProcessor::UpdatePathTracingCamera() {
                                            inliers_current.size() / 3, motion)) {
       tracked = true;
       pt_camera_draws_agreeing_ = agreeing;
+    }
+  }
+
+  // Draws moving on their own (characters, props) - with the ones that did
+  // recently, so parts holding still for a moment don't change materials.
+  for (const DrawPairs& pairs : draws) {
+    if (tracked && RigidTransformError(motion, &current[pairs.first * 3],
+                                       &previous[pairs.first * 3], pairs.count) > tolerance(pairs)) {
+      pt_dynamic_draw_frames_[pt_draw_keys_[pairs.draw]] = pt_frame_;
+    }
+  }
+  for (size_t i = 0; i < pt_draws_.size(); ++i) {
+    auto it = pt_dynamic_draw_frames_.find(pt_draw_keys_[i]);
+    if (it != pt_dynamic_draw_frames_.end() && pt_frame_ - it->second < 120) {
+      pt_draws_[i].flags |= kPathTracingDrawDynamic;
+    }
+  }
+  if (pt_dynamic_draw_frames_.size() > 16384) {
+    for (auto it = pt_dynamic_draw_frames_.begin(); it != pt_dynamic_draw_frames_.end();) {
+      it = pt_frame_ - it->second >= 120 ? pt_dynamic_draw_frames_.erase(it) : std::next(it);
     }
   }
 
@@ -1590,6 +1615,8 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   constants.debug_view = uint32_t(std::clamp(REXCVAR_GET(path_tracing_debug_view), 0, 10));
   constants.specular = std::max(float(REXCVAR_GET(path_tracing_specular)), 0.0f);
   constants.roughness = std::clamp(float(REXCVAR_GET(path_tracing_roughness)), 0.02f, 1.0f);
+  constants.dynamic_roughness =
+      std::clamp(float(REXCVAR_GET(path_tracing_character_roughness)), 0.02f, 1.0f);
   constants.frame_index = pt_frame_;
   constants.history_valid = history_valid ? 1 : 0;
   constants.temporal_alpha =
@@ -1820,7 +1847,7 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   // Lighting (this frame's samples).
   PushUAVBarrier(pt_stats_buffer_.Get());
   ok = ok && set_pass({scene, tex(gbuffer_texture), tex(PathTracingTexture::kSpecularAlbedo),
-                       {pt_sky_map_.Get(), nullptr}},
+                       {pt_sky_map_.Get(), nullptr}, tex(PathTracingTexture::kNormalRoughness)},
                       {tex(PathTracingTexture::kLighting), tex(PathTracingTexture::kSpecular),
                        tex(PathTracingTexture::kShadow)});
   SetExternalPipeline(pt_lighting_pipeline_.Get());
@@ -1989,7 +2016,8 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   PushUAVBarrier(pt_stats_buffer_.Get());
   ok = ok && set_pass({tex(gbuffer_texture), tex(PathTracingTexture::kAlbedo),
                        tex(PathTracingTexture::kSpecularAlbedo), tex(lighting_result),
-                       tex(specular_result), tex(shadow_result)},
+                       tex(specular_result), tex(shadow_result),
+                       tex(PathTracingTexture::kNormalRoughness)},
                       {tex(PathTracingTexture::kHDR)});
   SetExternalPipeline(pt_resolve_pipeline_.Get());
   SubmitBarriers();

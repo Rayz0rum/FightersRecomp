@@ -25,6 +25,8 @@ Texture2D<float4> pt_lighting : register(t3, space3);
 Texture2D<float4> pt_specular_radiance : register(t4, space3);
 // Denoised sun visibility.
 Texture2D<float4> pt_shadow : register(t5, space3);
+// World normal, roughness (w).
+Texture2D<float4> pt_normal_roughness : register(t6, space3);
 RWTexture2D<float4> pt_hdr_out : register(u0, space3);
 
 [numthreads(8, 8, 1)]
@@ -64,7 +66,8 @@ void main(uint3 id : SV_DispatchThreadID) {
       diffuse = max(diffuse, 0.0);
       specular = max(specular, 0.0);
       float3 irradiance = pt_sun_color * (max(dot(normal, sun), 0.0) * shadow) + diffuse;
-      float highlight = PTSpecularHighlight(normal, view, sun, pt_roughness) * shadow;
+      float highlight =
+          PTSpecularHighlight(normal, view, sun, pt_normal_roughness[local].w) * shadow;
       color = albedo * irradiance +
               (specular * pt_specular_albedo[local].rgb + pt_sun_color * highlight) * pt_specular;
       if (pt_debug_view == 8) {
