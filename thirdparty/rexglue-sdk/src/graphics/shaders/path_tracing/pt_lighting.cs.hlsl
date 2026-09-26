@@ -30,6 +30,8 @@ Texture2D<float4> pt_color : register(t0, space3);
 // Local pixels.
 Texture2D<float4> pt_gbuffer : register(t1, space3);
 Texture2D<float4> pt_specular_albedo : register(t2, space3);
+// The sky around the scene by world direction (octahedral, see pt_sky).
+Texture2D<float4> pt_sky_map : register(t3, space3);
 // Total irradiance / total specular, or indirect diffuse / indirect specular /
 // sun visibility (NRD penumbra or FSR occluder distance, the occluder
 // distance, visibility).
@@ -37,9 +39,19 @@ RWTexture2D<float4> pt_lighting_out : register(u0, space3);
 RWTexture2D<float4> pt_specular_out : register(u1, space3);
 RWTexture2D<float4> pt_shadow_out : register(u2, space3);
 
-// Radiance of the sky in a direction.
+// Radiance of the sky in a view space direction: what the background showed
+// in that direction, or the average background where it hasn't been seen.
 float3 PTSky(float3 sky, float3 up, float3 direction) {
-  return sky * (0.6 + 0.4 * dot(direction, up));
+  float3 average = sky * (0.6 + 0.4 * dot(direction, up));
+  float4 learned = pt_sky_map.SampleLevel(
+      pt_sampler_linear_clamp, PTNormalToOctahedron(PTViewToWorld(direction)), 0.0);
+  if (learned.a <= 0.0) {
+    return average;
+  }
+  float3 color = lerp(dot(learned.rgb, kPTLuminance).xxx, learned.rgb, pt_sky_saturation) *
+                     pt_sky_scale +
+                 pt_ambient;
+  return lerp(average, color, learned.a);
 }
 
 // Light a hit surface reflects towards the ray: the sun if it reaches it, and

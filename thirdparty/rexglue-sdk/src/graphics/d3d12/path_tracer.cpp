@@ -50,6 +50,10 @@ REXCVAR_DEFINE_STRING(path_tracing_albedo_shader, "", "GPU/Path Tracing",
                       "Pixel shader (ucode hash, hexadecimal) of the scene's surfaces, whose "
                       "lighting factor register is overridden to render unlit colors for the "
                       "path tracer to light (empty to relight the game's shaded colors)");
+REXCVAR_DEFINE_BOOL(path_tracing_albedo_override, false, "GPU/Path Tracing",
+                    "Render the surfaces with the lighting factor register overridden (unlit "
+                    "colors) - otherwise the game's lighting is divided out of its colors, which "
+                    "also works where the factor selects colors rather than brightness");
 REXCVAR_DEFINE_INT32(path_tracing_albedo_register, -1, "GPU/Path Tracing",
                      "Pixel shader register with the lighting factor for albedo rendering");
 REXCVAR_DEFINE_INT32(path_tracing_albedo_component, 0, "GPU/Path Tracing",
@@ -77,7 +81,7 @@ REXCVAR_DEFINE_DOUBLE(path_tracing_bounce, 1.0, "GPU/Path Tracing",
                       "Strength of the light bounced off surfaces");
 REXCVAR_DEFINE_DOUBLE(path_tracing_sky, 1.0, "GPU/Path Tracing",
                       "Strength of the sky light (colored like the frame's background)");
-REXCVAR_DEFINE_DOUBLE(path_tracing_sky_saturation, 0.25, "GPU/Path Tracing",
+REXCVAR_DEFINE_DOUBLE(path_tracing_sky_saturation, 0.6, "GPU/Path Tracing",
                       "How much of the background's color the sky light keeps (0 - neutral, 1 - "
                       "all)");
 REXCVAR_DEFINE_BOOL(path_tracing_replace_game_shadows, true, "GPU/Path Tracing",
@@ -130,6 +134,8 @@ REXCVAR_DEFINE_INT32(path_tracing_debug_view, 0, "GPU/Path Tracing",
                      "indirect diffuse, 10 - denoised indirect specular (NRD and FSR)");
 REXCVAR_DEFINE_BOOL(path_tracing_debug_log, false, "GPU/Path Tracing",
                     "Periodically log path tracing statistics");
+REXCVAR_DEFINE_BOOL(path_tracing_debug_trace, false, "GPU/Path Tracing",
+                    "Every 300 frames, log all draws and resolves of a frame");
 REXCVAR_DEFINE_STRING(path_tracing_debug_dump, "", "GPU/Path Tracing",
                       "Path prefix to periodically dump the traced triangles to, for analysis");
 
@@ -144,6 +150,7 @@ namespace shaders {
 #include "../shaders/bytecode/d3d12_6_5/pt_denoise_cs.h"
 #include "../shaders/bytecode/d3d12_6_5/pt_lighting_cs.h"
 #include "../shaders/bytecode/d3d12_6_5/pt_primary_cs.h"
+#include "../shaders/bytecode/d3d12_6_5/pt_sky_cs.h"
 #include "../shaders/bytecode/d3d12_6_5/pt_sun_cs.h"
 #include "../shaders/bytecode/d3d12_6_5/pt_resolve_cs.h"
 #include "../shaders/bytecode/d3d12_6_5/pt_temporal_cs.h"
@@ -598,6 +605,7 @@ bool D3D12CommandProcessor::InitializePathTracing() {
   PipelineInfo pipelines[] = {
       {pt_convert_pipeline_, shaders::pt_convert_cs, sizeof(shaders::pt_convert_cs)},
       {pt_sun_pipeline_, shaders::pt_sun_cs, sizeof(shaders::pt_sun_cs)},
+      {pt_sky_pipeline_, shaders::pt_sky_cs, sizeof(shaders::pt_sky_cs)},
       {pt_primary_pipeline_, shaders::pt_primary_cs, sizeof(shaders::pt_primary_cs)},
       {pt_lighting_pipeline_, shaders::pt_lighting_cs, sizeof(shaders::pt_lighting_cs)},
       {pt_temporal_pipeline_, shaders::pt_temporal_cs, sizeof(shaders::pt_temporal_cs)},
@@ -630,6 +638,27 @@ bool D3D12CommandProcessor::InitializePathTracing() {
     view_bindless_heap_allocated_ += count;
   }
 
+  // The learned sky (starts unseen - zero).
+  {
+    D3D12_RESOURCE_DESC desc = {};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = kPathTracingSkyMapSize;
+    desc.Height = kPathTracingSkyMapSize;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = kLightingFormat;
+    desc.SampleDesc.Count = 1;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    if (FAILED(device->CreateCommittedResource(
+            &heap_default, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
+            IID_PPV_ARGS(&pt_sky_map_)))) {
+      REXGPU_ERROR("Path tracing: failed to create the sky map");
+      ShutdownPathTracing();
+      return false;
+    }
+  }
+
   // The game's light direction for the denoisers.
   if (!create_buffer(256 * kQueueFrames, D3D12_RESOURCE_FLAG_NONE,
                      ui::d3d12::util::kHeapPropertiesReadback, D3D12_HEAP_FLAG_NONE,
@@ -659,6 +688,8 @@ void D3D12CommandProcessor::ShutdownPathTracing() {
   pt_output_width_ = 0;
   pt_output_height_ = 0;
   pt_sun_readback_.Reset();
+  pt_sky_map_.Reset();
+  pt_sky_pipeline_.Reset();
   pt_composite_pipeline_.Reset();
   pt_denoise_pipeline_.Reset();
   pt_compose_pipeline_.Reset();
@@ -719,17 +750,24 @@ uint64_t D3D12CommandProcessor::PathTracingFetchKey(const xenos::xe_gpu_texture_
          (uint64_t(fetch.dword_4) << 41 | fetch.dword_5);
 }
 
-uint32_t D3D12CommandProcessor::PathTracingTextureSlot(const xenos::xe_gpu_texture_fetch_t& fetch) {
-  uint64_t key = PathTracingFetchKey(fetch);
+uint32_t D3D12CommandProcessor::PathTracingTextureSlot(uint32_t fetch_constant_index) {
+  uint64_t key = PathTracingFetchKey(register_file_->GetTextureFetch(fetch_constant_index));
   auto it = pt_texture_slots_.find(key);
   if (it != pt_texture_slots_.end()) {
     return it->second;
   }
-  if (pt_texture_fetches_.size() >= kPathTracingMaxTextures) {
+  if (pt_texture_handles_.size() >= kPathTracingMaxTextures) {
     return UINT32_MAX;
   }
-  uint32_t slot = uint32_t(pt_texture_fetches_.size());
-  pt_texture_fetches_.push_back(fetch);
+  // The texture the draw uses.
+  D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc;
+  void* texture = texture_cache_->GetActiveTexture(fetch_constant_index, srv_desc);
+  if (!texture) {
+    return UINT32_MAX;
+  }
+  uint32_t slot = uint32_t(pt_texture_handles_.size());
+  pt_texture_handles_.push_back(texture);
+  pt_texture_srv_descs_.push_back(srv_desc);
   pt_texture_slots_.emplace(key, slot);
   return slot;
 }
@@ -759,7 +797,8 @@ void D3D12CommandProcessor::UpdatePathTracingCapture(
     pt_draw_samples_.clear();
     pt_draw_sample_ranges_.clear();
     pt_draw_triangles_ = 0;
-    pt_texture_fetches_.clear();
+    pt_texture_handles_.clear();
+    pt_texture_srv_descs_.clear();
     pt_texture_slots_.clear();
     pt_material_found_ = false;
     float scale_x = 0.0f, scale_y = 0.0f;
@@ -802,8 +841,8 @@ void D3D12CommandProcessor::UpdatePathTracingCapture(
   float alpha_scale = 0.0f, alpha_bias = 0.0f;
   if (flags && pt_albedo_shader_hash_ && pixel_shader->ucode_data_hash() == pt_albedo_shader_hash_) {
     flags |= kPathTracingDrawMaterial;
-    texture = PathTracingTextureSlot(regs.GetTextureFetch(0));
-    palette = PathTracingTextureSlot(regs.GetTextureFetch(1));
+    texture = PathTracingTextureSlot(0);
+    palette = PathTracingTextureSlot(1);
     const uint32_t* pixel_constants = &regs.values[XE_GPU_REG_SHADER_CONSTANT_256_X];
     // The shader kills if c254.y > alpha * c1.w - c1.x.
     float c1[4], c254[4];
@@ -813,6 +852,16 @@ void D3D12CommandProcessor::UpdatePathTracingCapture(
     alpha_bias = c1[0] + c254[1];
     if (alpha_bias > 0.0f) {
       flags |= kPathTracingDrawAlphaTest;
+    }
+    if (REXCVAR_GET(path_tracing_debug_trace) && pt_frame_ % 300 == 7) {
+      float c255[4], c0[4];
+      std::memcpy(c255, pixel_constants + 4 * 255, sizeof(c255));
+      std::memcpy(c0, pixel_constants + 4 * 0, sizeof(c0));
+      REXGPU_INFO(
+          "Path tracing draw {}: c254 {:.4f} {:.4f} {:.4f} {:.4f}, c255 {:.4f} {:.4f} {:.4f} "
+          "{:.4f}, c0 {:.4f}, c1 {:.4f} {:.4f} {:.4f} {:.4f}, z write {}",
+          pt_draws_.size(), c254[0], c254[1], c254[2], c254[3], c255[0], c255[1], c255[2],
+          c255[3], c0[0], c1[0], c1[1], c1[2], c1[3], bool(normalized_depth_control.z_write_enable));
     }
     if (!pt_material_found_) {
       pt_material_found_ = true;
@@ -875,6 +924,7 @@ void D3D12CommandProcessor::SamplePathTracingDrawVertices(
     }
   }
   const RegisterFile& regs = *register_file_;
+  uint32_t debug_factor_min = UINT32_MAX, debug_factor_max = 0;
   if (position_binding && position_binding->stride_words >= 3 && memory_) {
     xenos::xe_gpu_vertex_fetch_t fetch = regs.GetVertexFetch(position_binding->fetch_constant);
     uint32_t buffer_address = fetch.address << 2;
@@ -916,6 +966,19 @@ void D3D12CommandProcessor::SamplePathTracingDrawVertices(
       }
       pt_draw_samples_.insert(pt_draw_samples_.end(), position, position + 3);
       ++count;
+      if (REXCVAR_GET(path_tracing_debug_trace) && pt_frame_ % 300 == 7 &&
+          position_binding->stride_words > 3) {
+        uint32_t factor_bits = xenos::GpuSwap(vertex[3], fetch.endian);
+        debug_factor_min = std::min(debug_factor_min, factor_bits);
+        debug_factor_max = std::max(debug_factor_max, factor_bits);
+      }
+    }
+    if (REXCVAR_GET(path_tracing_debug_trace) && pt_frame_ % 300 == 7) {
+      REXGPU_INFO("PTTRACE capture draw {}: tf0 {:08X} tf1 {:08X}, {} vertices, lighting dword "
+                  "{:08X}...{:08X}, flags {:X}",
+                  pt_draw_sample_ranges_.size() / 2, regs.GetTextureFetch(0).base_address << 12,
+                  regs.GetTextureFetch(1).base_address << 12, index_count, debug_factor_min,
+                  debug_factor_max, pt_draws_.empty() ? 0 : pt_draws_.back().flags);
     }
   }
   pt_draw_sample_ranges_.push_back(first);
@@ -1093,7 +1156,8 @@ bool D3D12CommandProcessor::IsPathTracingAlbedoDraw(const Shader& pixel_shader,
     pt_albedo_shader_hash_ = std::strtoull(shader_text.c_str(), nullptr, 16);
   }
   // Solid geometry only - blended effects may fade with the lighting factor.
-  if (!pt_capture_buffer_ || !normalized_depth_control.z_enable ||
+  if (!REXCVAR_GET(path_tracing_albedo_override) || !pt_capture_buffer_ ||
+      !normalized_depth_control.z_enable ||
       !normalized_depth_control.z_write_enable || !pt_albedo_shader_hash_ ||
       pixel_shader.ucode_data_hash() != pt_albedo_shader_hash_) {
     return false;
@@ -1350,11 +1414,11 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   };
   std::vector<MaterialTexture> material_textures;
   if (materials) {
-    material_textures.resize(pt_texture_fetches_.size());
-    for (size_t i = 0; i < pt_texture_fetches_.size(); ++i) {
-      xenos::TextureFormat format;
-      material_textures[i].resource = texture_cache_->RequestTexture(
-          pt_texture_fetches_[i], material_textures[i].srv_desc, format);
+    material_textures.resize(pt_texture_handles_.size());
+    for (size_t i = 0; i < pt_texture_handles_.size(); ++i) {
+      material_textures[i].resource =
+          texture_cache_->PrepareActiveTextureForReading(pt_texture_handles_[i]);
+      material_textures[i].srv_desc = pt_texture_srv_descs_[i];
     }
   }
 
@@ -1515,7 +1579,8 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
       std::max(float(REXCVAR_GET(path_tracing_shadow_distance)), 1.0e-3f);
   constants.flags = (REXCVAR_GET(path_tracing_replace_game_shadows) ? 1u << 0 : 0u) |
                     (REXCVAR_GET(path_tracing_game_sun) ? 1u << 1 : 0u) |
-                    (camera_tracked ? 1u << 2 : 0u);
+                    (camera_tracked ? 1u << 2 : 0u) |
+                    (REXCVAR_GET(path_tracing_albedo_override) ? 1u << 3 : 0u);
   constants.sky_saturation =
       std::clamp(float(REXCVAR_GET(path_tracing_sky_saturation)), 0.0f, 1.0f);
   constants.max_distance = std::max(float(REXCVAR_GET(path_tracing_max_distance)), 1.0e-2f);
@@ -1742,9 +1807,17 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   SubmitBarriers();
   deferred_command_list_.D3DDispatch(rect_groups_x, rect_groups_y, 1);
 
+  // The sky seen in this frame.
+  ok = ok && set_pass({scene, tex(gbuffer_texture)}, {{pt_sky_map_.Get(), nullptr}});
+  SetExternalPipeline(pt_sky_pipeline_.Get());
+  SubmitBarriers();
+  deferred_command_list_.D3DDispatch((kPathTracingSkyMapSize + 7) / 8,
+                                     (kPathTracingSkyMapSize + 7) / 8, 1);
+
   // Lighting (this frame's samples).
   PushUAVBarrier(pt_stats_buffer_.Get());
-  ok = ok && set_pass({scene, tex(gbuffer_texture), tex(PathTracingTexture::kSpecularAlbedo)},
+  ok = ok && set_pass({scene, tex(gbuffer_texture), tex(PathTracingTexture::kSpecularAlbedo),
+                       {pt_sky_map_.Get(), nullptr}},
                       {tex(PathTracingTexture::kLighting), tex(PathTracingTexture::kSpecular),
                        tex(PathTracingTexture::kShadow)});
   SetExternalPipeline(pt_lighting_pipeline_.Get());

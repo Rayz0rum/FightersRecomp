@@ -596,7 +596,7 @@ class D3D12CommandProcessor : public CommandProcessor {
       const PrimitiveProcessor::ProcessingResult& primitive_processing, bool rasterization_done,
       bool has_pixel_shader);
   static uint64_t PathTracingFetchKey(const xenos::xe_gpu_texture_fetch_t& fetch);
-  uint32_t PathTracingTextureSlot(const xenos::xe_gpu_texture_fetch_t& fetch);
+  uint32_t PathTracingTextureSlot(uint32_t fetch_constant_index);
   // Called once per presented guest frame from IssueSwap. Returns the texture
   // to present instead of the swap texture (with its SRV description), or
   // nullptr if the frame is presented as is.
@@ -759,6 +759,10 @@ class D3D12CommandProcessor : public CommandProcessor {
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_bloom_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_composite_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_compose_pipeline_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_sky_pipeline_;
+  // The sky around the scene by world direction (octahedral, see pt_sky).
+  static constexpr uint32_t kPathTracingSkyMapSize = 32;
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_sky_map_;
   // Working textures, covering the scene rectangle (see pt_common.hlsli).
   enum class PathTracingTexture : uint32_t {
     // Normal and view depth of the primary surface of every pixel, this and
@@ -893,7 +897,10 @@ class D3D12CommandProcessor : public CommandProcessor {
   uint32_t pt_camera_draws_agreeing_ = 0;
   uint32_t pt_world_resets_ = 0;
   uint32_t pt_draw_triangles_ = 0;
-  std::vector<xenos::xe_gpu_texture_fetch_t> pt_texture_fetches_;
+  // Textures of the material draws (texture cache handles, see
+  // D3D12TextureCache::GetActiveTexture) and their SRV descriptions.
+  std::vector<void*> pt_texture_handles_;
+  std::vector<D3D12_SHADER_RESOURCE_VIEW_DESC> pt_texture_srv_descs_;
   std::unordered_map<uint64_t, uint32_t> pt_texture_slots_;
   // From the first material draw: the pixel shader constants c254, c255,
   // c1, c0 of the material model (the alpha test and color table are per

@@ -1,9 +1,12 @@
 // Surface materials of the captured triangles, and ray queries honoring
 // their alpha test.
 //
-// The material model is the game's pixel shader with the per-vertex lighting
-// factor at 1 (see path_tracing_albedo_shader): the texture holds intensities,
-// and a row of a color table (Model 2 style) maps them to colors.
+// The material model is the game's pixel shader (see
+// path_tracing_albedo_shader): the texture holds intensities, scaled by the
+// per-vertex lighting factor, and a row of a color table (Model 2 style) maps
+// them to colors. The surface color is the game's at its own lighting factor
+// (some rows aren't plain brightness ramps - the factor picks the colors),
+// with the brightness then divided by the factor.
 
 #ifndef PT_MATERIAL_HLSLI_
 #define PT_MATERIAL_HLSLI_
@@ -47,7 +50,19 @@ struct PTSurface {
   bool valid;
 };
 
-PTSurface PTMaterialSurfaceAt(float2 uv, float row, uint draw_index) {
+// Undoes the game's lighting of a color it rendered with a lighting factor:
+// the color table value (before the shader's output transform) divided by
+// the factor.
+float3 PTNormalizeLighting(float3 color, float factor) {
+  float4 c254 = asfloat(pt_materials.Load4(0));
+  float4 c255 = asfloat(pt_materials.Load4(16));
+  float exponent = max(asfloat(pt_materials.Load(48)), 1.0e-3);
+  float3 value = (pow(saturate(color), 1.0 / exponent) - c255.x) / max(c254.w, 1.0e-3);
+  value /= max(factor, 0.25);
+  return pow(saturate(value * c254.w + c255.x), exponent);
+}
+
+PTSurface PTMaterialSurfaceAt(float2 uv, float row, uint draw_index, float factor) {
   PTSurface surface;
   surface.albedo = float3(0.35, 0.35, 0.35);
   surface.alpha_margin = 1.0;
@@ -70,11 +85,13 @@ PTSurface PTMaterialSurfaceAt(float2 uv, float row, uint draw_index) {
   float4 c254 = asfloat(pt_materials.Load4(0));
   float4 c255 = asfloat(pt_materials.Load4(16));
   float4 c0 = asfloat(pt_materials.Load4(48));
-  // Color table column from the intensity, at the full lighting factor.
-  float column = texel.x * c254.x + c254.z;
+  // Color table column from the intensity at the game's lighting factor, and
+  // the value normalized for the factor.
+  float column = texel.x * c254.x * factor + c254.z;
   float4 color = pt_material_textures[NonUniformResourceIndex(draw_material.x)].SampleLevel(
       pt_sampler_linear_clamp, float2(column, row), 0.0);
-  surface.albedo = pow(saturate(color.xyz * c254.w + c255.x), max(c0.x, 1.0e-3));
+  surface.albedo =
+      pow(saturate(color.xyz / max(factor, 0.25) * c254.w + c255.x), max(c0.x, 1.0e-3));
   surface.alpha_margin = texel.w * asfloat(draw_material.y) - asfloat(draw_material.z);
   surface.valid = true;
   return surface;
@@ -84,9 +101,11 @@ PTSurface PTMaterialSurface(uint triangle_index, float2 barycentrics) {
   uint address = triangle_index * 48;
   uint4 attributes_0 = pt_attributes.Load4(address);
   uint4 attributes_1 = pt_attributes.Load4(address + 16);
-  float2 uv = asfloat(attributes_0.xy) * (1.0 - barycentrics.x - barycentrics.y) +
-              asfloat(attributes_0.zw) * barycentrics.x + asfloat(attributes_1.xy) * barycentrics.y;
-  return PTMaterialSurfaceAt(uv, asfloat(attributes_1.z), attributes_1.w);
+  float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
+  float2 uv = asfloat(attributes_0.xy) * weights.x + asfloat(attributes_0.zw) * weights.y +
+              asfloat(attributes_1.xy) * weights.z;
+  float factor = dot(asfloat(pt_attributes.Load3(address + 32)), weights);
+  return PTMaterialSurfaceAt(uv, asfloat(attributes_1.z), attributes_1.w, factor);
 }
 
 // The game's own lighting factors of the triangle's vertices.

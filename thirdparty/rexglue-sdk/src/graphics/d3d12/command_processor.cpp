@@ -47,6 +47,7 @@ REXCVAR_DEFINE_BOOL(d3d12_submit_on_primary_buffer_end, true, "GPU/D3D12",
                     "Submit command list when PM4 primary buffer ends")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+REXCVAR_DECLARE(bool, path_tracing_debug_trace);
 REXCVAR_DEFINE_BOOL(path_tracing, false, "GPU/Path Tracing",
                     "Experimental: path-traced lighting over the game's own shading, from "
                     "geometry captured with stream output (D3D12 only).")
@@ -2652,6 +2653,20 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   SetPrimitiveTopology(primitive_topology);
   // Must not call anything that may change the primitive topology from now on!
 
+  if (REXCVAR_GET(path_tracing_debug_trace) && pt_frame_ % 300 == 7) {
+    xenos::xe_gpu_texture_fetch_t fetch0 = regs.GetTextureFetch(0);
+    REXGPU_INFO(
+        "PTTRACE draw vp {},{} {}x{} z {}{} vs {:016X} ps {:016X} tf0 {:08X} {}x{} prim {} verts {} "
+        "capturing {}",
+        viewport_info.xy_offset[0], viewport_info.xy_offset[1], viewport_info.xy_extent[0],
+        viewport_info.xy_extent[1], uint32_t(normalized_depth_control.z_enable),
+        uint32_t(normalized_depth_control.z_write_enable), vertex_shader->ucode_data_hash(),
+        pixel_shader ? pixel_shader->ucode_data_hash() : 0, fetch0.base_address << 12,
+        fetch0.size_2d.width + 1, fetch0.size_2d.height + 1,
+        uint32_t(primitive_processing_result.guest_primitive_type),
+        primitive_processing_result.guest_draw_vertex_count,
+        pt_captured_this_frame_ && !pt_capture_done_this_frame_);
+  }
   if (pt_capture_buffer_) {
     UpdatePathTracingCapture(primitive_processing_result, primitive_polygonal,
                              is_rasterization_done,
@@ -2925,6 +2940,11 @@ bool D3D12CommandProcessor::IssueCopy() {
 #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
+  if (REXCVAR_GET(path_tracing_debug_trace) && pt_frame_ % 300 == 7) {
+    REXGPU_INFO("PTTRACE resolve to {:08X} (capture {}, done {})",
+                register_file_->values[XE_GPU_REG_RB_COPY_DEST_BASE], pt_captured_this_frame_,
+                pt_capture_done_this_frame_);
+  }
   if (pt_captured_this_frame_ && !pt_capture_done_this_frame_) {
     pt_capture_done_this_frame_ = true;
     pt_scene_address_ = register_file_->values[XE_GPU_REG_RB_COPY_DEST_BASE];

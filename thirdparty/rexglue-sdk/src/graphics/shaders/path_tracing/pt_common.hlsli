@@ -90,6 +90,9 @@ static const uint kPTFlagGameSun = 1u << 1;
 // The previous frame's view is related to this one's (pt_view_to_previous_view
 // is valid).
 static const uint kPTFlagCameraTracked = 1u << 2;
+// The game renders its surfaces with the lighting factor overridden (unlit
+// colors in the frame) rather than lit.
+static const uint kPTFlagAlbedoRendering = 1u << 3;
 
 // pt_denoiser.
 static const uint kPTDenoiserBuiltin = 0;

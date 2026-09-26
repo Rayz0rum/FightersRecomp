@@ -121,6 +121,16 @@ void main(uint3 id : SV_DispatchThreadID) {
 
       if (PTMaterialsValid()) {
         PTSurface surface = PTMaterialSurface(primitive, barycentrics);
+        uint draw_index = pt_attributes.Load(primitive * 48 + 28);
+        if (surface.valid && draw_index != 0xFFFFFFFFu &&
+            (PTDraw(draw_index).w & kPTDrawOpaque) && !(pt_flags & kPTFlagAlbedoRendering)) {
+          // The frame has the game's lit colors - undone with the triangle's
+          // lighting factor.
+          float factor = dot(PTLightFactors(primitive),
+                             float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x,
+                                    barycentrics.y));
+          albedo = PTNormalizeLighting(color, factor);
+        }
         if (surface.valid) {
           if (pt_debug_view == 6) {
             albedo = surface.albedo;
@@ -131,10 +141,19 @@ void main(uint3 id : SV_DispatchThreadID) {
             float spread = max(max(factors.x, factors.y), factors.z) -
                            min(min(factors.x, factors.y), factors.z);
             albedo = float3(factor, factor, saturate(spread * 4.0));
-          } else if ((pt_flags & kPTFlagReplaceGameShadows) &&
-                     dot(color, kPTLuminance) < dot(surface.albedo, kPTLuminance) * 0.6) {
-            // Darkened by a shadow of the game's (including its soft edges).
-            albedo = surface.albedo;
+          } else if (pt_flags & kPTFlagReplaceGameShadows) {
+            // Darkened by a shadow of the game's (including its soft edges):
+            // the same color as the material, scaled down - not another
+            // surface drawn over it (decals and layers not in the traced
+            // geometry keep their colors).
+            float3 material = surface.albedo;
+            float material_squared = dot(material, material);
+            float scale = dot(albedo, material) / max(material_squared, 1.0e-4);
+            float3 residual = albedo - material * scale;
+            if (scale < 0.6 &&
+                dot(residual, residual) < 0.01 * material_squared + 3.0e-3) {
+              albedo = material;
+            }
           }
         }
       }

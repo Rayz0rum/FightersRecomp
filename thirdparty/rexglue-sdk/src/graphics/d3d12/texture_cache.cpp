@@ -1417,6 +1417,37 @@ ID3D12Resource* D3D12TextureCache::RequestTexture(const xenos::xe_gpu_texture_fe
   return texture_resource;
 }
 
+void* D3D12TextureCache::GetActiveTexture(uint32_t fetch_constant_index,
+                                          D3D12_SHADER_RESOURCE_VIEW_DESC& srv_desc_out) {
+  const TextureBinding* binding = GetValidTextureBinding(fetch_constant_index);
+  if (!binding || !binding->texture) {
+    return nullptr;
+  }
+  auto* texture = static_cast<D3D12Texture*>(binding->texture);
+  const TextureKey& key = texture->key();
+  if (key.dimension != xenos::DataDimension::k2DOrStacked) {
+    return nullptr;
+  }
+  texture->MarkAsUsed();
+  srv_desc_out = {};
+  srv_desc_out.Format = GetDXGIUnormFormat(key);
+  srv_desc_out.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  srv_desc_out.Shader4ComponentMapping =
+      binding->host_swizzle | D3D12_SHADER_COMPONENT_MAPPING_ALWAYS_SET_BIT_AVOIDING_ZEROMEM_MISTAKES;
+  srv_desc_out.Texture2D.MipLevels = 1;
+  return texture;
+}
+
+ID3D12Resource* D3D12TextureCache::PrepareActiveTextureForReading(void* texture_handle) {
+  auto* texture = static_cast<D3D12Texture*>(texture_handle);
+  texture->MarkAsUsed();
+  constexpr D3D12_RESOURCE_STATES kState =
+      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+  command_processor_.PushTransitionBarrier(texture->resource(), texture->SetResourceState(kState),
+                                           kState);
+  return texture->resource();
+}
+
 D3D12TextureCache::D3D12Texture::D3D12Texture(D3D12TextureCache& texture_cache,
                                               const TextureKey& key, ID3D12Resource* resource,
                                               D3D12_RESOURCE_STATES resource_state,

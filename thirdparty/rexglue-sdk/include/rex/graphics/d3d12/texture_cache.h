@@ -168,6 +168,15 @@ class D3D12TextureCache final : public TextureCache {
                                  xenos::TextureFormat& format_out,
                                  uint32_t* width_unscaled_out = nullptr,
                                  uint32_t* height_unscaled_out = nullptr);
+  // For reading the textures of a draw later in the frame (path tracing):
+  // the 2D texture bound to a fetch constant as of the latest RequestTextures,
+  // without loading anything (requesting textures outside the draws' binding
+  // tracking may make updates of their memory go unnoticed), as a handle valid
+  // while the texture is in use, and the description of its SRV.
+  void* GetActiveTexture(uint32_t fetch_constant_index,
+                         D3D12_SHADER_RESOURCE_VIEW_DESC& srv_desc_out);
+  // Makes a texture from GetActiveTexture readable by shaders and returns it.
+  ID3D12Resource* PrepareActiveTextureForReading(void* texture);
 
  protected:
   bool IsSignedVersionSeparateForFormat(TextureKey key) const override;

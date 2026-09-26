@@ -100,7 +100,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     if ((draw_flags & kPTDrawMaterial) && PTMaterialsValid() && normal.y > 0.5 &&
         (pt_flags & kPTFlagReplaceGameShadows)) {
       PTSurface surface =
-          PTMaterialSurfaceAt((uv[0] + uv[1] + uv[2]) * (1.0 / 3.0), row, draw_index);
+          PTMaterialSurfaceAt((uv[0] + uv[1] + uv[2]) * (1.0 / 3.0), row, draw_index,
+                              dot(light_factors, float3(1.0, 1.0, 1.0)) * (1.0 / 3.0));
       if (surface.valid && max(max(surface.albedo.r, surface.albedo.g), surface.albedo.b) < 0.02) {
         valid = false;
       }
