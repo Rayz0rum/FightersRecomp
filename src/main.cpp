@@ -1258,8 +1258,12 @@ uint32_t StfrResolveMenuDescription(uint8_t* base)
             "Player 2 lets the keyboard play against a controller.",
             "Path traced lighting: choose its denoiser, or Off."
         };
-        description = descriptions[static_cast<size_t>(
-            std::clamp(g_pc_selected_row.load(), 0, kPcSettingRows - 1))];
+        const int row = std::clamp(g_pc_selected_row.load(), 0, kPcSettingRows - 1);
+        description = descriptions[static_cast<size_t>(row)];
+        // The path tracer is only set up at launch.
+        if (row == kPcSettingRows - 1 && rex::cvar::GetFlagByName("path_tracing") != "true") {
+            description = "Needs path_tracing = true in stf_xbla.toml (restart).";
+        }
     } else if (g_help_options_active.load() && g_help_options_object.load() &&
                GetTickCount64() - g_help_options_draw_tick.load() < 300) {
         switch (REX_LOAD_U32(g_help_options_object.load() + 76)) {
