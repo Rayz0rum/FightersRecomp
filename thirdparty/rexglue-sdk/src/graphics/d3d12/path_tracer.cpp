@@ -2190,7 +2190,8 @@ void D3D12CommandProcessor::PathTracingFrameEnd() {
                         D3D12_RESOURCE_STATE_STREAM_OUT);
 
   pt_captured_this_frame_ = false;
-  pt_capture_done_this_frame_ = false;
+  // Nothing to capture while path tracing is off.
+  pt_capture_done_this_frame_ = REXCVAR_GET(path_tracing_denoiser) == "off";
   // The history is only usable if the previous frame was path traced.
   pt_rendered_previous_frame_ = pt_rendered_this_frame_;
   pt_rendered_this_frame_ = false;
