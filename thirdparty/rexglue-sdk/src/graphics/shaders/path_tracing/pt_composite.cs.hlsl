@@ -9,18 +9,20 @@
 
 // Header of the material buffer: float at 64 - bloom strength.
 ByteAddressBuffer pt_materials : register(t7);
-Texture2D<float4> pt_color : register(t2);
-Texture2D<float4> pt_gbuffer : register(t3);
+// Output pixels.
+Texture2D<float4> pt_color : register(t0, space3);
+Texture2D<float4> pt_final_frame : register(t1, space3);
+// Local pixels.
+Texture2D<float4> pt_gbuffer : register(t2, space3);
 // Exposed linear HDR color, alpha - whether lit by the path tracer.
-Texture2D<float4> pt_hdr : register(t4);
-Texture2D<float4> pt_final_frame : register(t5);
-Texture2D<float4> pt_albedo : register(t6);
+Texture2D<float4> pt_hdr : register(t3, space3);
+Texture2D<float4> pt_albedo : register(t4, space3);
 // Quarter resolution bloom of the scene.
-Texture2D<float4> pt_bloom : register(t0, space2);
+Texture2D<float4> pt_bloom : register(t5, space3);
 SamplerState pt_sampler_linear_clamp : register(s0);
-RWTexture2D<float4> pt_output : register(u3);
+// Output pixels.
+RWTexture2D<float4> pt_output : register(u0, space3);
 
-float3 PTLinear(float3 color) { return pow(max(color, 0.0), 2.2); }
 float3 PTEncode(float3 color) { return pow(saturate(color), 1.0 / 2.2); }
 
 // Narkowicz's ACES filmic curve fit.
@@ -35,16 +37,16 @@ void main(uint3 id : SV_DispatchThreadID) {
     return;
   }
   float4 frame = pt_final_frame[pixel];
-  if (PTInRect(pixel)) {
-    float4 surface = pt_gbuffer[pixel];
+  int2 local = pixel - int2(pt_rect_min);
+  if (PTInRect(local)) {
+    float4 surface = pt_gbuffer[local];
     float3 scene = pt_color[pixel].rgb;
     // Where the HUD covers the scene.
     float3 difference = abs(frame.rgb - scene);
     float hud = saturate((max(max(difference.r, difference.g), difference.b) - 0.02) * 40.0);
-    float4 hdr = pt_hdr[pixel];
-    uint2 rect_size = pt_rect_max - pt_rect_min;
-    float2 bloom_uv =
-        (float2(pixel - int2(pt_rect_min)) + 0.5) / (float2((rect_size + 3) / 4) * 4.0);
+    float4 hdr = pt_hdr[local];
+    uint2 rect_size = PTRectSize();
+    float2 bloom_uv = (float2(local) + 0.5) / (float2((rect_size + 3) / 4) * 4.0);
     float3 bloom =
         pt_bloom.SampleLevel(pt_sampler_linear_clamp, bloom_uv, 0.0).rgb *
         asfloat(pt_materials.Load(64));
@@ -55,20 +57,20 @@ void main(uint3 id : SV_DispatchThreadID) {
       result = surface.w > 0.0 ? surface.xyz * 0.5 + 0.5 : float3(0.0, 0.0, 0.0);
     } else if (pt_debug_view == 3) {
       if (surface.w > 0.0) {
-        float4 right = pt_gbuffer[min(pixel + int2(1, 0), int2(pt_rect_max) - 1)];
-        float4 below = pt_gbuffer[min(pixel + int2(0, 1), int2(pt_rect_max) - 1)];
+        float4 right = pt_gbuffer[min(local + int2(1, 0), int2(rect_size) - 1)];
+        float4 below = pt_gbuffer[min(local + int2(0, 1), int2(rect_size) - 1)];
         if (abs(right.w - surface.w) > 0.03 * surface.w ||
             abs(below.w - surface.w) > 0.03 * surface.w) {
           result = float3(1.0, 0.0, 1.0);
         }
       }
       result = lerp(result, float3(0.0, 1.0, 0.0), hud * 0.5);
-    } else if (pt_debug_view >= 5) {
-      result = pt_albedo[pixel].rgb;
+    } else if (pt_debug_view >= 5 && pt_debug_view <= 7) {
+      result = pt_albedo[local].rgb;
     } else if (pt_debug_view != 4 || uint(pixel.x) * 2 >= pt_rect_min.x + pt_rect_max.x) {
       // 4 - the left half of the scene unlit, for comparison.
       if (hdr.a > 0.0) {
-        result = lerp(pt_albedo[pixel].rgb, PTEncode(PTToneMap(hdr.rgb + bloom)), pt_strength);
+        result = lerp(pt_albedo[local].rgb, PTEncode(PTToneMap(hdr.rgb + bloom)), pt_strength);
       } else {
         // The background (sky) keeps its look, with the glow of the scene.
         result = PTEncode(PTLinear(scene) + bloom * pt_strength);

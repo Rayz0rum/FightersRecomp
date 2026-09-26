@@ -163,6 +163,15 @@ function(rexglue_configure_target target_name)
                 $<TARGET_FILE_DIR:${target_name}>
             VERBATIM
         )
+        # Libraries the plugin loads at runtime (path tracing denoisers).
+        if(_plugin STREQUAL "xenos" AND REXGPU_XENOS_RUNTIME_FILES)
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${REXGPU_XENOS_RUNTIME_FILES}
+                    $<TARGET_FILE_DIR:${target_name}>
+                VERBATIM
+            )
+        endif()
         unset(_plugin_target)
     endforeach()
 

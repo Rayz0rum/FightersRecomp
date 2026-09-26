@@ -36,6 +36,10 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
   const uintmax_t* stream = command_stream_.data();
   size_t stream_remaining = command_stream_.size();
   ID3D12PipelineState* current_pipeline_state = nullptr;
+  // Restored after external work.
+  ID3D12RootSignature* current_compute_root_signature = nullptr;
+  ID3D12RootSignature* current_graphics_root_signature = nullptr;
+  SetDescriptorHeapsArguments current_descriptor_heaps = {};
   // Queried on first use - only needed for ray tracing.
   Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> command_list_4;
   bool command_list_4_queried = false;
@@ -208,12 +212,12 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
                                                         args.buffer_location);
       } break;
       case Command::kD3DSetComputeRootSignature: {
-        command_list->SetComputeRootSignature(
-            *reinterpret_cast<ID3D12RootSignature* const*>(stream));
+        current_compute_root_signature = *reinterpret_cast<ID3D12RootSignature* const*>(stream);
+        command_list->SetComputeRootSignature(current_compute_root_signature);
       } break;
       case Command::kD3DSetGraphicsRootSignature: {
-        command_list->SetGraphicsRootSignature(
-            *reinterpret_cast<ID3D12RootSignature* const*>(stream));
+        current_graphics_root_signature = *reinterpret_cast<ID3D12RootSignature* const*>(stream);
+        command_list->SetGraphicsRootSignature(current_graphics_root_signature);
       } break;
       case Command::kD3DSetComputeRootUnorderedAccessView: {
         auto& args = *reinterpret_cast<const SetRootConstantBufferViewArguments*>(stream);
@@ -227,6 +231,7 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
       } break;
       case Command::kSetDescriptorHeaps: {
         auto& args = *reinterpret_cast<const SetDescriptorHeapsArguments*>(stream);
+        current_descriptor_heaps = args;
         UINT num_descriptor_heaps = 0;
         ID3D12DescriptorHeap* descriptor_heaps[2];
         if (args.cbv_srv_uav_descriptor_heap != nullptr) {
@@ -289,6 +294,31 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         const char* label_name = reinterpret_cast<const char*>(
             reinterpret_cast<const uint8_t*>(stream) + sizeof(DebugMarkerHeader));
         command_list->SetMarker(1, label_name, static_cast<UINT>(args.label_length + 1));
+      } break;
+      case Command::kCallback: {
+        auto& args = *reinterpret_cast<const CallbackArguments*>(stream);
+        args.function(args.context, command_list);
+        ID3D12DescriptorHeap* descriptor_heaps[2];
+        UINT num_descriptor_heaps = 0;
+        if (current_descriptor_heaps.cbv_srv_uav_descriptor_heap) {
+          descriptor_heaps[num_descriptor_heaps++] =
+              current_descriptor_heaps.cbv_srv_uav_descriptor_heap;
+        }
+        if (current_descriptor_heaps.sampler_descriptor_heap) {
+          descriptor_heaps[num_descriptor_heaps++] = current_descriptor_heaps.sampler_descriptor_heap;
+        }
+        if (num_descriptor_heaps) {
+          command_list->SetDescriptorHeaps(num_descriptor_heaps, descriptor_heaps);
+        }
+        if (current_compute_root_signature) {
+          command_list->SetComputeRootSignature(current_compute_root_signature);
+        }
+        if (current_graphics_root_signature) {
+          command_list->SetGraphicsRootSignature(current_graphics_root_signature);
+        }
+        if (current_pipeline_state) {
+          command_list->SetPipelineState(current_pipeline_state);
+        }
       } break;
       default:
         assert_unhandled_case(header.command);

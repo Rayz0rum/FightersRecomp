@@ -472,6 +472,19 @@ class DeferredCommandList {
 
   void EndDebugMarker() { WriteCommand(Command::kEndDebugMarker, 0); }
 
+  // Records work done by code outside the command list's control (such as
+  // vendor denoisers) into the actual command list when it's executed. The
+  // pipeline state, root signatures and descriptor heaps set before are
+  // restored afterwards - root arguments aren't. The context must stay valid
+  // until the command list is executed.
+  using CallbackFunction = void (*)(void* context, ID3D12GraphicsCommandList* command_list);
+  void ExternalCallback(CallbackFunction function, void* context) {
+    auto& args =
+        *reinterpret_cast<CallbackArguments*>(WriteCommand(Command::kCallback, sizeof(CallbackArguments)));
+    args.function = function;
+    args.context = context;
+  }
+
   void InsertDebugMarker(const char* label_name) {
     size_t label_len = std::strlen(label_name);
     uint8_t* args_ptr = reinterpret_cast<uint8_t*>(
@@ -526,6 +539,12 @@ class DeferredCommandList {
     kBeginDebugMarker,
     kEndDebugMarker,
     kInsertDebugMarker,
+    kCallback,
+  };
+
+  struct CallbackArguments {
+    CallbackFunction function;
+    void* context;
   };
 
   struct D3DSOSetTargetArguments {

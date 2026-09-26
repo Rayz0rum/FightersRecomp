@@ -1,54 +1,86 @@
 // Path traces the lighting of the primary surface of every scene pixel, in
-// linear HDR (the composite multiplies it with the surface color, exposes and
-// tone maps it):
-// - sun light, with soft shadow rays over the sun's disk,
+// linear HDR (not multiplied by the surface color - the resolve does that):
+// - sun light, with shadow rays over the sun's disk,
 // - global illumination: cosine-distributed rays that either escape to the
 //   sky (colored like the frame's background) or hit a surface, which reflects
 //   the sun (with its own shadow ray) and the sky, with its material's color.
 // - specular: GGX highlights of the sun and a ray traced glossy reflection of
-//   the scene (dielectric, Fresnel-weighted), output separately as it isn't
-//   multiplied by the surface color.
+//   the scene (dielectric, Fresnel-weighted).
 // Alpha-tested geometry (foliage, fences) lets light through its holes.
+//
+// Outputs, depending on the denoiser:
+// - built-in and DLSS Ray Reconstruction: total irradiance (sun and indirect)
+//   and total specular.
+// - NRD and FSR Ray Regeneration: separate signals - sun visibility (the
+//   shadow ray's occluder distance), indirect diffuse irradiance and indirect
+//   specular (divided by the specular albedo) with their hit distances. The
+//   sun's direct light and highlight are added back analytically with the
+//   denoised visibility.
 
 #include "pt_material.hlsli"
+
+#define NRD_HEADER_ONLY
+#include "NRD.hlsli"
 
 RaytracingAccelerationStructure pt_scene : register(t0);
 ByteAddressBuffer pt_vertices : register(t1);
 RWByteAddressBuffer pt_stats : register(u1);
-Texture2D<float4> pt_color : register(t2);
-Texture2D<float4> pt_gbuffer : register(t3);
-RWTexture2D<float4> pt_lighting_out : register(u2);
-RWTexture2D<float4> pt_specular_out : register(u3);
-
-static const float kPTPi = 3.14159265359;
-
-float PTFresnel(float cosine) {
-  // Schlick's approximation for a dielectric (F0 = 0.04).
-  float f = 1.0 - saturate(cosine);
-  float f2 = f * f;
-  return 0.04 + 0.96 * f2 * f2 * f;
-}
-
-// Smith G1 for GGX.
-float PTSmithG1(float n_dot_x, float alpha2) {
-  return 2.0 * n_dot_x / (n_dot_x + sqrt(alpha2 + (1.0 - alpha2) * n_dot_x * n_dot_x));
-}
+// Output pixels.
+Texture2D<float4> pt_color : register(t0, space3);
+// Local pixels.
+Texture2D<float4> pt_gbuffer : register(t1, space3);
+Texture2D<float4> pt_specular_albedo : register(t2, space3);
+// Total irradiance / total specular, or indirect diffuse / indirect specular /
+// sun visibility (NRD penumbra or FSR occluder distance, the occluder
+// distance, visibility).
+RWTexture2D<float4> pt_lighting_out : register(u0, space3);
+RWTexture2D<float4> pt_specular_out : register(u1, space3);
+RWTexture2D<float4> pt_shadow_out : register(u2, space3);
 
 // Radiance of the sky in a direction.
 float3 PTSky(float3 sky, float3 up, float3 direction) {
   return sky * (0.6 + 0.4 * dot(direction, up));
 }
 
-float3 PTLinear(float3 color) { return pow(max(color, 0.0), 2.2); }
+// Light a hit surface reflects towards the ray: the sun if it reaches it, and
+// the sky (roughly half of it visible), times its material color.
+float3 PTHitRadiance(float3 origin, float3 direction, float t, uint primitive, float2 barycentrics,
+                     float3 sky, float3 up, float3 sun, bool materials) {
+  float3 hit = origin + direction * t;
+  float3 hit_normal = PTTriangleNormal(pt_vertices, primitive, -direction);
+  float3 albedo = float3(0.35, 0.35, 0.35);
+  PTSurface hit_material;
+  hit_material.valid = false;
+  if (materials) {
+    hit_material = PTMaterialSurface(primitive, barycentrics);
+  }
+  if (hit_material.valid) {
+    albedo = hit_material.albedo;
+  } else if (hit.z > 1.0e-3) {
+    int2 hit_local = int2(PTProjectToPixel(hit)) - int2(pt_rect_min);
+    if (PTInRect(hit_local)) {
+      albedo = lerp(albedo, pt_color[pt_rect_min + uint2(hit_local)].rgb, 0.5);
+    }
+  }
+  float3 hit_irradiance = PTSky(sky, up, hit_normal) * 0.5;
+  float hit_n_dot_l = dot(hit_normal, sun);
+  if (hit_n_dot_l > 0.0) {
+    float hit_bias = 2.0e-3 * max(hit.z, 0.0) + 1.0e-3;
+    if (!PTTraceAny(pt_scene, hit + hit_normal * hit_bias, sun, pt_shadow_distance)) {
+      hit_irradiance += pt_sun_color * hit_n_dot_l;
+    }
+  }
+  return PTLinear(albedo) * hit_irradiance;
+}
 
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
+  int2 local = int2(id.xy);
+  bool inside = PTInRect(local);
   uint2 pixel = pt_rect_min + id.xy;
-  bool inside = all(pixel < pt_rect_max);
-  float4 surface = inside ? pt_gbuffer[pixel] : float4(0.0, 0.0, 0.0, -1.0);
+  float4 surface = inside ? pt_gbuffer[local] : float4(0.0, 0.0, 0.0, -1.0);
   bool lit = surface.w > 0.0;
-  float3 irradiance = float3(1.0, 1.0, 1.0);
-  float3 specular = float3(0.0, 0.0, 0.0);
+  bool split = PTSplitSignals();
 
   // Sky light from the average background, mostly neutral (the background
   // may be anything, like a big blue wall) and smoothed over time so turning
@@ -69,79 +101,72 @@ void main(uint3 id : SV_DispatchThreadID) {
   }
   sky = PTLinear(sky) * pt_sky_scale + pt_ambient;
 
+  float3 total_irradiance = float3(1.0, 1.0, 1.0);
+  float4 lighting = float4(0.0, 0.0, 0.0, 0.0);
+  float4 specular = float4(0.0, 0.0, 0.0, 0.0);
+  float4 shadow = float4(0.0, 0.0, 0.0, 0.0);
   if (lit) {
     float3 up = PTGroundUp(pt_stats.Load3(stats_base));
-
-    // Sun direction relative to the ground plane.
-    float3 forward_flat = float3(0.0, 0.0, 1.0) - up * up.z;
-    forward_flat = dot(forward_flat, forward_flat) > 1.0e-6 ? normalize(forward_flat)
-                                                            : float3(0.0, 0.0, 1.0);
-    float3 right_flat = cross(up, forward_flat);
-    float elevation = pt_sun_angles.x, azimuth = pt_sun_angles.y;
-    float3 sun = up * sin(elevation) +
-                 (-forward_flat * cos(azimuth) + right_flat * sin(azimuth)) * cos(elevation);
+    float3 sun = PTSunDirection(pt_stats.Load4(kPTStatsSunOffset + pt_stats_slot * 16), up);
 
     float3 normal = surface.xyz;
     float3 position = PTPixelRay(float2(pixel) + 0.5) * surface.w;
     float bias = 2.0e-3 * surface.w + 1.0e-3;
     float3 origin = position + normal * bias;
-
-    // Stratified over 4x4 pixel blocks, which the denoiser then averages.
-    uint cell = (pixel.x & 3) | ((pixel.y & 3) << 2);
-    uint ray_count = max(pt_ray_count, 1u);
-    float sample_count_inv = 1.0 / float(16 * ray_count);
-    // Different samples every frame for the temporal accumulation.
-    float2 frame_offset = PTFrameOffset();
-
     float3 view = -normalize(position);
     float n_dot_v = max(dot(normal, view), 1.0e-3);
     float alpha = pt_roughness * pt_roughness;
     float alpha2 = alpha * alpha;
-    float sun_visibility = 0.0;
+    bool materials = PTMaterialsValid();
+    uint ray_count = max(pt_ray_count, 1u);
 
-    // Direct sun light.
-    irradiance = float3(0.0, 0.0, 0.0);
+    // Direct sun light: shadow rays over the sun's disk.
+    float sun_visibility = 0.0;
+    float occluder_distance = kPTFP16Max;
     float n_dot_l = dot(normal, sun);
     if (n_dot_l > 0.0) {
       float3 sun_tangent, sun_bitangent;
       PTBasis(sun, sun_tangent, sun_bitangent);
+      uint seed = PTRandomSeed(pixel, 0);
+      // One ray for the denoisers working on the visibility (it's the
+      // distribution they expect), more for the others.
+      uint shadow_rays = split ? 1u : ray_count;
       uint unshadowed = 0;
-      for (uint i = 0; i < ray_count; ++i) {
-        uint k = cell + 16 * i;
-        float2 u = frac(float2((float(k) + 0.5) * sample_count_inv, PTRadicalInverse(k)) +
-                        frame_offset);
+      for (uint i = 0; i < shadow_rays; ++i) {
+        float2 u = PTRandom2(seed);
         float phi = 6.28318530718 * u.y;
         float r = sqrt(u.x) * pt_sun_softness;
         float3 direction =
             normalize(sun + sun_tangent * (r * cos(phi)) + sun_bitangent * (r * sin(phi)));
-        if (!PTTraceAny(pt_scene, origin, direction, pt_shadow_distance)) {
+        if (split) {
+          float t;
+          uint primitive;
+          float2 barycentrics;
+          if (PTTraceClosest(pt_scene, origin, direction, 0.0, pt_shadow_distance, t, primitive,
+                             barycentrics)) {
+            occluder_distance = min(occluder_distance, t);
+          } else {
+            ++unshadowed;
+          }
+        } else if (!PTTraceAny(pt_scene, origin, direction, pt_shadow_distance)) {
           ++unshadowed;
         }
       }
-      sun_visibility = float(unshadowed) / float(ray_count);
-      irradiance += pt_sun_color * (n_dot_l * sun_visibility);
-      // Sun highlight.
-      if (pt_specular > 0.0) {
-        float3 half_vector = normalize(sun + view);
-        float n_dot_h = saturate(dot(normal, half_vector));
-        float d = n_dot_h * n_dot_h * (alpha2 - 1.0) + 1.0;
-        float distribution = alpha2 / (kPTPi * d * d);
-        float geometry = PTSmithG1(n_dot_l, alpha2) * PTSmithG1(n_dot_v, alpha2);
-        specular += pt_sun_color *
-                    (distribution * geometry * PTFresnel(dot(view, half_vector)) /
-                     (4.0 * n_dot_v) * sun_visibility * pt_specular);
-      }
+      sun_visibility = float(unshadowed) / float(shadow_rays);
+    } else {
+      // Facing away from the sun: fully shadowed at no distance.
+      occluder_distance = 0.0;
     }
+    float3 direct = pt_sun_color * (max(n_dot_l, 0.0) * sun_visibility);
 
     // Global illumination.
     float3 tangent, bitangent;
     PTBasis(normal, tangent, bitangent);
     float3 indirect = float3(0.0, 0.0, 0.0);
-    bool materials = PTMaterialsValid();
+    float hit_distance_sum = 0.0;
+    uint seed = PTRandomSeed(pixel, 1);
     for (uint i = 0; i < ray_count; ++i) {
-      uint k = cell + 16 * i;
-      float2 u = frac(float2((float(k) + 0.5) * sample_count_inv, PTRadicalInverse(k)) +
-                      frame_offset);
+      float2 u = PTRandom2(seed);
       float phi = 6.28318530718 * u.y;
       float r = sqrt(u.x);
       float3 direction = tangent * (r * cos(phi)) + bitangent * (r * sin(phi)) +
@@ -152,48 +177,23 @@ void main(uint3 id : SV_DispatchThreadID) {
       if (!PTTraceClosest(pt_scene, origin, direction, 0.0, pt_gi_distance, t, primitive,
                           barycentrics)) {
         indirect += PTSky(sky, up, direction);
+        hit_distance_sum += pt_gi_distance;
         continue;
       }
-      float3 hit = origin + direction * t;
-      float3 hit_normal = PTTriangleNormal(pt_vertices, primitive, -direction);
-      // Color of the hit surface: its material, or the frame where it's
-      // visible if the materials aren't known.
-      float3 albedo = float3(0.35, 0.35, 0.35);
-      PTSurface hit_material;
-      hit_material.valid = false;
-      if (materials) {
-        hit_material = PTMaterialSurface(primitive, barycentrics);
-      }
-      if (hit_material.valid) {
-        albedo = hit_material.albedo;
-      } else if (hit.z > 1.0e-3) {
-        int2 hit_pixel = int2(PTProjectToPixel(hit));
-        if (PTInRect(hit_pixel)) {
-          float4 hit_surface = pt_gbuffer[hit_pixel];
-          float3 hit_color = pt_color[hit_pixel].rgb;
-          bool seen = hit_surface.w > 0.0 &&
-                      abs(hit_surface.w - hit.z) < 0.05 * hit.z + 4.0 * bias;
-          albedo = seen ? hit_color : lerp(albedo, hit_color, 0.5);
-        }
-      }
-      // Light the hit surface reflects: the sun if it reaches it, and the
-      // sky (roughly half of it visible).
-      float3 hit_irradiance = PTSky(sky, up, hit_normal) * 0.5;
-      float hit_n_dot_l = dot(hit_normal, sun);
-      if (hit_n_dot_l > 0.0) {
-        float hit_bias = 2.0e-3 * max(hit.z, 0.0) + 1.0e-3;
-        if (!PTTraceAny(pt_scene, hit + hit_normal * hit_bias, sun, pt_shadow_distance)) {
-          hit_irradiance += pt_sun_color * hit_n_dot_l;
-        }
-      }
-      indirect += PTLinear(albedo) * hit_irradiance * pt_bounce_scale;
+      indirect += PTHitRadiance(origin, direction, t, primitive, barycentrics, sky, up, sun,
+                                materials) *
+                  pt_bounce_scale;
+      hit_distance_sum += t;
     }
-    irradiance += indirect / float(ray_count);
+    indirect /= float(ray_count);
+    float hit_distance = hit_distance_sum / float(ray_count);
 
     // Glossy reflection of the scene: one GGX-distributed ray.
+    float3 reflection = float3(0.0, 0.0, 0.0);
+    float reflection_distance = 0.0;
     if (pt_specular > 0.0) {
-      float2 u = frac(float2((float(cell) + 0.5) * (1.0 / 16.0), PTRadicalInverse(cell)) +
-                      frame_offset);
+      uint reflection_seed = PTRandomSeed(pixel, 2);
+      float2 u = PTRandom2(reflection_seed);
       // Microfacet normal from the GGX distribution.
       float cos_theta = sqrt((1.0 - u.x) / (1.0 + (alpha2 - 1.0) * u.x));
       float sin_theta = sqrt(max(1.0 - cos_theta * cos_theta, 0.0));
@@ -201,51 +201,77 @@ void main(uint3 id : SV_DispatchThreadID) {
       float3 half_vector = normalize(tangent * (sin_theta * cos(phi)) +
                                      bitangent * (sin_theta * sin(phi)) + normal * cos_theta);
       float3 direction = reflect(-view, half_vector);
-      float n_dot_l = dot(normal, direction);
-      if (n_dot_l > 0.0) {
+      float reflection_n_dot_l = dot(normal, direction);
+      if (reflection_n_dot_l > 0.0) {
         float v_dot_h = saturate(dot(view, half_vector));
         float n_dot_h = max(dot(normal, half_vector), 1.0e-3);
         // Importance sampled: F * G * (v.h) / (n.h * n.v).
-        float weight = PTFresnel(v_dot_h) * PTSmithG1(n_dot_l, alpha2) *
+        float weight = PTFresnel(v_dot_h) * PTSmithG1(reflection_n_dot_l, alpha2) *
                        PTSmithG1(n_dot_v, alpha2) * v_dot_h / (n_dot_h * n_dot_v);
-        float3 radiance;
         float t;
         uint primitive;
         float2 barycentrics;
+        float3 radiance;
         if (!PTTraceClosest(pt_scene, origin, direction, 0.0, pt_gi_distance, t, primitive,
                             barycentrics)) {
           radiance = PTSky(sky, up, direction);
+          reflection_distance = pt_gi_distance;
         } else {
-          float3 hit = origin + direction * t;
-          float3 hit_normal = PTTriangleNormal(pt_vertices, primitive, -direction);
-          float3 albedo = float3(0.35, 0.35, 0.35);
-          if (materials) {
-            PTSurface hit_material = PTMaterialSurface(primitive, barycentrics);
-            if (hit_material.valid) {
-              albedo = hit_material.albedo;
-            }
-          }
-          float3 hit_irradiance = PTSky(sky, up, hit_normal) * 0.5;
-          float hit_n_dot_l = dot(hit_normal, sun);
-          if (hit_n_dot_l > 0.0) {
-            float hit_bias = 2.0e-3 * max(hit.z, 0.0) + 1.0e-3;
-            if (!PTTraceAny(pt_scene, hit + hit_normal * hit_bias, sun, pt_shadow_distance)) {
-              hit_irradiance += pt_sun_color * hit_n_dot_l;
-            }
-          }
-          radiance = PTLinear(albedo) * hit_irradiance;
+          radiance = PTHitRadiance(origin, direction, t, primitive, barycentrics, sky, up, sun,
+                                   materials);
+          reflection_distance = t;
         }
-        specular += radiance * (weight * pt_specular);
+        reflection = radiance * weight;
       }
     }
+
+    total_irradiance = direct + indirect;
+    if (split) {
+      float3 specular_albedo = max(pt_specular_albedo[local].rgb, 1.0e-3);
+      float3 demodulated_reflection = reflection / specular_albedo;
+      // NRD (SIGMA): penumbra size, FSR: occluder distance (FP16 max if none).
+      float fsr_distance = min(occluder_distance, kPTFP16Max);
+      shadow = float4(pt_denoiser == kPTDenoiserNRD
+                          ? SIGMA_FrontEnd_PackPenumbra(occluder_distance, pt_sun_softness)
+                          : fsr_distance,
+                      fsr_distance, sun_visibility, 1.0);
+      if (pt_denoiser == kPTDenoiserNRD) {
+        float3 hit_parameters = pt_nrd_hit_distance_parameters.xyz;
+        lighting = REBLUR_FrontEnd_PackRadianceAndNormHitDist(
+            indirect, REBLUR_FrontEnd_GetNormHitDist(hit_distance, surface.w, hit_parameters, 1.0),
+            true);
+        specular = REBLUR_FrontEnd_PackRadianceAndNormHitDist(
+            demodulated_reflection,
+            REBLUR_FrontEnd_GetNormHitDist(reflection_distance, surface.w, hit_parameters,
+                                           pt_roughness),
+            true);
+      } else {
+        lighting = float4(indirect, hit_distance);
+        specular = float4(demodulated_reflection, reflection_distance);
+      }
+    } else {
+      float highlight =
+          PTSpecularHighlight(normal, view, sun, pt_roughness) * sun_visibility * pt_specular;
+      lighting = float4(total_irradiance, 1.0);
+      specular = float4(min(pt_sun_color * highlight + reflection * pt_specular, 64.0), 1.0);
+    }
+  } else if (split) {
+    // Background: nothing to denoise.
+    shadow = float4(kPTFP16Max, kPTFP16Max, 1.0, 0.0);
+    lighting = pt_denoiser == kPTDenoiserNRD ? float4(0.0, 0.0, 0.0, 1.0)
+                                             : float4(0.0, 0.0, 0.0, -1.0);
+    specular = lighting;
   }
   if (inside) {
-    pt_lighting_out[pixel] = float4(irradiance, 1.0);
-    pt_specular_out[pixel] = float4(min(specular, 64.0), 1.0);
+    pt_lighting_out[local] = lighting;
+    pt_specular_out[local] = specular;
+    if (split) {
+      pt_shadow_out[local] = shadow;
+    }
   }
 
   // Average brightness for the auto exposure.
-  uint luminance = lit ? uint(min(dot(irradiance, kPTLuminance), 64.0) * 32.0) : 0;
+  uint luminance = lit ? uint(min(dot(total_irradiance, kPTLuminance), 64.0) * 32.0) : 0;
   uint luminance_sum = WaveActiveSum(luminance);
   uint lit_count = WaveActiveCountBits(lit);
   if (WaveIsFirstLane() && lit_count != 0) {

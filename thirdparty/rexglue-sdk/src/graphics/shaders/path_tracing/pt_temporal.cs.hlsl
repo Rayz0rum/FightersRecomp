@@ -8,25 +8,26 @@
 
 #include "pt_common.hlsli"
 
+// All local pixels.
 // Previous frame position of the surface: output pixel xy, view depth, and
 // whether it's known.
-Texture2D<float4> pt_motion : register(t2);
-Texture2D<float4> pt_gbuffer : register(t3);
-Texture2D<float4> pt_lighting : register(t4);
-Texture2D<float4> pt_previous_gbuffer : register(t5);
+Texture2D<float4> pt_motion : register(t0, space3);
+Texture2D<float4> pt_gbuffer : register(t1, space3);
+Texture2D<float4> pt_lighting : register(t2, space3);
+Texture2D<float4> pt_previous_gbuffer : register(t3, space3);
 // Irradiance, and the number of frames accumulated in alpha.
-Texture2D<float4> pt_history : register(t6);
-Texture2D<float4> pt_specular_radiance : register(t0, space2);
-Texture2D<float4> pt_specular_history : register(t1, space2);
-RWTexture2D<float4> pt_history_out : register(u2);
-RWTexture2D<float4> pt_specular_history_out : register(u3);
+Texture2D<float4> pt_history : register(t4, space3);
+Texture2D<float4> pt_specular_radiance : register(t5, space3);
+Texture2D<float4> pt_specular_history : register(t6, space3);
+RWTexture2D<float4> pt_history_out : register(u0, space3);
+RWTexture2D<float4> pt_specular_history_out : register(u1, space3);
 
 static const float kPTMaxHistory = 32.0;
 
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
-  uint2 pixel = pt_rect_min + id.xy;
-  if (any(pixel >= pt_rect_max)) {
+  int2 pixel = int2(id.xy);
+  if (!PTInRect(pixel)) {
     return;
   }
   float4 surface = pt_gbuffer[pixel];
@@ -38,7 +39,7 @@ void main(uint3 id : SV_DispatchThreadID) {
   float history_weight = 0.0;
   if (pt_history_valid && surface.w > 0.0 && motion.w > 0.0) {
     // Bilinear, with the taps showing a different surface rejected.
-    float2 position = motion.xy - 0.5;
+    float2 position = motion.xy - float2(pt_rect_min) - 0.5;
     int2 base = int2(floor(position));
     float2 fraction = position - float2(base);
     [unroll] for (uint i = 0; i < 4; ++i) {
@@ -73,7 +74,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     float count = 0.0;
     [unroll] for (int y = -1; y <= 1; ++y) {
       [unroll] for (int x = -1; x <= 1; ++x) {
-        int2 tap = int2(pixel) + int2(x, y) * 2;
+        int2 tap = pixel + int2(x, y) * 2;
         if (!PTInRect(tap) || PTSurfaceWeight(surface, pt_gbuffer[tap]) < 0.5) {
           continue;
         }

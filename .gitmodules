@@ -1,0 +1,3 @@
+[submodule "thirdparty/rexglue-sdk/thirdparty/NRD"]
+	path = thirdparty/rexglue-sdk/thirdparty/NRD
+	url = https://github.com/NVIDIA-RTX/NRD.git

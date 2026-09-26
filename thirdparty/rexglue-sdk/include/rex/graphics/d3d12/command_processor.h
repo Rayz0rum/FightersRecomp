@@ -576,8 +576,20 @@ class D3D12CommandProcessor : public CommandProcessor {
   void UpdatePathTracingCapture(const PrimitiveProcessor::ProcessingResult& primitive_processing,
                                 bool primitive_polygonal, bool rasterization_done,
                                 reg::RB_DEPTHCONTROL normalized_depth_control,
-                                const Shader* pixel_shader,
+                                const Shader& vertex_shader, const Shader* pixel_shader,
                                 const draw_util::ViewportInfo& viewport_info);
+  // Copies a sample of a captured draw's view space vertex positions from
+  // guest memory (where the game has already transformed them) for tracking
+  // the camera.
+  void SamplePathTracingDrawVertices(const PrimitiveProcessor::ProcessingResult& primitive_processing,
+                                     const Shader& vertex_shader);
+  // Estimates the camera motion since the previous frame from the draws seen
+  // in both (the static scenery moves rigidly with the camera) and updates
+  // the world space the denoisers work in.
+  void UpdatePathTracingCamera();
+  // Invalidates the command list state cached for guest draws after work
+  // that changed it outside the command processor's control.
+  void InvalidatePathTracingCommandListState();
   // Triangles written to the capture buffer by a draw while it's bound (its
   // pipeline has stream output - see PipelineCache::CreateD3D12Pipeline).
   static uint32_t PathTracingStreamOutTriangles(
@@ -594,7 +606,85 @@ class D3D12CommandProcessor : public CommandProcessor {
                                     D3D12_SHADER_RESOURCE_VIEW_DESC& srv_desc_out);
   // Called once per guest frame from IssueSwap, after PathTracingRender.
   void PathTracingFrameEnd();
-  bool EnsurePathTracingTextures(uint32_t width, uint32_t height);
+  // Creates the working textures for the scene rectangle and the output.
+  bool EnsurePathTracingTextures(uint32_t rect_width, uint32_t rect_height, uint32_t output_width,
+                                 uint32_t output_height);
+
+  // Denoisers (path_tracer_denoisers.cpp): NRD (default), DLSS Ray
+  // Reconstruction, FSR Ray Regeneration, and the built-in filter.
+  enum class PathTracingDenoiser : uint32_t {
+    kBuiltin,
+    kNRD,
+    kDLSSRR,
+    kFSRRR,
+  };
+  struct PathTracingDenoiserState;
+  // The denoiser to use this frame - the configured one if available, NRD or
+  // the built-in filter otherwise.
+  PathTracingDenoiser SelectPathTracingDenoiser();
+  // Inputs of the denoisers for a frame (all rectangle-sized textures, in
+  // D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE).
+  struct PathTracingDenoiseInputs {
+    uint32_t width;
+    uint32_t height;
+    bool reset;
+    uint32_t frame_index;
+    // Column-major, column vectors (NRD's convention - same memory layout as
+    // row-major with row vectors of DLSS and FSR).
+    float view_to_clip[16];
+    float world_to_view[16];
+    float previous_world_to_view[16];
+    float camera_position_delta[3];
+    float denoising_range;
+    float sun_direction_world[3];
+    float sun_tan_angular_radius;
+    float sun_color[3];
+    float hit_distance_parameters[3];
+    float frame_time_ms;
+    ID3D12Resource* view_depth;
+    ID3D12Resource* nrd_normal_roughness;
+    ID3D12Resource* world_motion;
+    ID3D12Resource* screen_motion;
+    ID3D12Resource* normal_roughness;
+    ID3D12Resource* octahedral_normal;
+    ID3D12Resource* diffuse_albedo;
+    ID3D12Resource* specular_albedo;
+    ID3D12Resource* diffuse_signal;
+    ID3D12Resource* specular_signal;
+    ID3D12Resource* shadow_signal;
+    ID3D12Resource* color;
+    // Outputs.
+    ID3D12Resource* diffuse_output;
+    ID3D12Resource* specular_output;
+    ID3D12Resource* shadow_output;
+    ID3D12Resource* color_output;
+  };
+  bool PathTracingDenoiseNRD(const PathTracingDenoiseInputs& inputs);
+  bool PathTracingDenoiseDLSSRR(const PathTracingDenoiseInputs& inputs);
+  bool PathTracingDenoiseFSRRR(const PathTracingDenoiseInputs& inputs);
+  void ShutdownPathTracingDenoisers();
+  // Transitions a path tracing resource, tracking its state within a frame
+  // (resources rest in NON_PIXEL_SHADER_RESOURCE between the passes).
+  void PathTracingUseResource(ID3D12Resource* resource, D3D12_RESOURCE_STATES state);
+  void PathTracingRestoreResourceStates();
+  std::vector<std::pair<ID3D12Resource*, D3D12_RESOURCE_STATES>> pt_resource_states_;
+  // Contiguous shader-visible descriptors for this frame's descriptor tables.
+  bool PathTracingAllocateDescriptors(uint32_t count,
+                                      ui::d3d12::util::DescriptorCpuGpuHandlePair& start);
+  static constexpr uint32_t kPathTracingDescriptorsPerFrame = 8192;
+  uint32_t pt_bindless_descriptor_base_ = UINT32_MAX;
+  // Descriptors of this frame (bindful: one request at the start of the
+  // frame's path tracing).
+  ui::d3d12::util::DescriptorCpuGpuHandlePair pt_frame_descriptors_ = {};
+  uint32_t pt_frame_descriptor_count_ = 0;
+  uint32_t pt_frame_descriptors_used_ = 0;
+  // Owned, deleted by ShutdownPathTracingDenoisers.
+  PathTracingDenoiserState* pt_denoiser_state_ = nullptr;
+  // Recording DLSS Ray Reconstruction and FSR Ray Regeneration into the
+  // command list (DeferredCommandList::ExternalCallback).
+  static void PathTracingDLSSCallback(void* context, ID3D12GraphicsCommandList* command_list);
+  static void PathTracingFSRCallback(void* context, ID3D12GraphicsCommandList* command_list);
+  PathTracingDenoiser pt_previous_denoiser_ = PathTracingDenoiser::kBuiltin;
 
   enum class PathTracingRootParameter : UINT {
     kConstants,
@@ -606,18 +696,9 @@ class D3D12CommandProcessor : public CommandProcessor {
     kAttributes,
     kRWAttributes,
     kPreviousVertices,
-    kTexture0,
-    kTexture1,
-    kTexture2,
-    kTexture3,
-    kTexture4,
-    // t0 and t1 in space 2.
-    kTexture5,
-    kTexture6,
-    kRWTexture0,
-    kRWTexture1,
-    // u5.
-    kRWTexture2,
+    // The pass's textures: t0...t15 and u0...u15 in space 3.
+    kTextures,
+    kRWTextures,
     // Unbounded, from the start of the view heap.
     kMaterialTextures,
 
@@ -638,7 +719,10 @@ class D3D12CommandProcessor : public CommandProcessor {
   static constexpr uint32_t kPathTracingMaterialUploadSize = 80 + kPathTracingMaxDraws * 32;
   // Per frame: constant buffers for the passes, then the materials.
   static constexpr uint32_t kPathTracingConstantSlots = 16;
-  static constexpr uint32_t kPathTracingConstantsUploadSize = kPathTracingConstantSlots * 256;
+  static constexpr uint32_t kPathTracingConstantSlotSize = 512;
+  static constexpr uint32_t kPathTracingConstantsUploadSize =
+      kPathTracingConstantSlots * kPathTracingConstantSlotSize;
+  static constexpr uint32_t kPathTracingPassTextures = 16;
   static constexpr uint32_t kPathTracingFrameUploadSize =
       kPathTracingConstantsUploadSize + ((kPathTracingMaterialUploadSize + 255) & ~255u);
   // Two regions: solid triangles (opaque geometry of the acceleration
@@ -666,6 +750,7 @@ class D3D12CommandProcessor : public CommandProcessor {
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_instance_upload_;
   Microsoft::WRL::ComPtr<ID3D12RootSignature> pt_root_signature_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_convert_pipeline_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_sun_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_primary_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_lighting_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_temporal_pipeline_;
@@ -673,32 +758,72 @@ class D3D12CommandProcessor : public CommandProcessor {
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_resolve_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_bloom_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_composite_pipeline_;
-  // Normal and view depth of the primary surface of every pixel, this and
-  // the previous frame's.
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_gbuffers_[2];
-  // Where the surfaces were in the previous frame.
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_motion_;
-  // Temporally accumulated lighting, this and the previous frame's.
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_irradiance_history_[2];
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_specular_history_[2];
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_compose_pipeline_;
+  // Working textures, covering the scene rectangle (see pt_common.hlsli).
+  enum class PathTracingTexture : uint32_t {
+    // Normal and view depth of the primary surface of every pixel, this and
+    // the previous frame's.
+    kGBuffer0,
+    kGBuffer1,
+    // Where the surfaces were in the previous frame.
+    kMotion,
+    // Surface colors (the scene without the game's own shadows).
+    kAlbedo,
+    // Denoiser guides.
+    kViewDepth,
+    kNRDNormalRoughness,
+    kWorldMotion,
+    kScreenMotion,
+    kNormalRoughness,
+    kOctahedralNormal,
+    kDiffuseAlbedo,
+    kSpecularAlbedo,
+    // Traced lighting (total irradiance or indirect diffuse), the built-in
+    // denoiser's intermediate, specular, sun visibility.
+    kLighting,
+    kLightingTemp,
+    kSpecular,
+    kShadow,
+    // Built-in temporal accumulation, this and the previous frame's.
+    kIrradianceHistory0,
+    kIrradianceHistory1,
+    kSpecularHistory0,
+    kSpecularHistory1,
+    // Outputs of the denoisers working on separate signals.
+    kDenoisedDiffuse,
+    kDenoisedSpecular,
+    kDenoisedShadow,
+    // Noisy lit color and its denoised version for DLSS Ray Reconstruction.
+    kRRColor,
+    kRROutput,
+    // Exposed linear HDR color, and quarter resolution bloom (ping-pong).
+    kHDR,
+    kBloomA,
+    kBloomB,
+
+    kCount,
+  };
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_textures_[size_t(PathTracingTexture::kCount)];
+  ID3D12Resource* PathTracingTextureResource(PathTracingTexture texture) const {
+    return pt_textures_[size_t(texture)].Get();
+  }
   uint32_t pt_history_index_ = 0;
   bool pt_rendered_this_frame_ = false;
   bool pt_rendered_previous_frame_ = false;
   float pt_previous_projection_[2] = {};
-  // Surface colors (the scene without the game's own shadows).
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_albedo_;
-  // Traced lighting and the denoiser's intermediate.
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_lighting_;
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_lighting_temp_;
-  // Specular radiance (not multiplied by the surface color).
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_specular_;
-  // Exposed linear HDR color, and quarter resolution bloom (ping-pong).
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_hdr_;
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_bloom_a_;
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_bloom_b_;
+  // The final image (output size).
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_output_;
+  // Size of the working textures (the scene rectangle) and of the output.
   uint32_t pt_texture_width_ = 0;
   uint32_t pt_texture_height_ = 0;
+  uint32_t pt_output_width_ = 0;
+  uint32_t pt_output_height_ = 0;
+  // The game's light direction in world space, read back from the GPU (a few
+  // frames late - it's fixed in the world) for the denoisers.
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_sun_readback_;
+  uint64_t pt_sun_readback_frames_[kQueueFrames] = {};
+  float pt_sun_direction_world_[3] = {0.0f, 1.0f, 0.0f};
+  uint64_t pt_last_render_time_ = 0;
   // Textures replaced while possibly still in use by the GPU.
   std::vector<std::pair<uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>>> pt_retired_textures_;
   bool pt_capture_bound_ = false;
@@ -745,6 +870,28 @@ class D3D12CommandProcessor : public CommandProcessor {
   std::vector<uint64_t> pt_draw_keys_;
   std::vector<PathTracingDraw> pt_previous_draws_;
   std::vector<uint64_t> pt_previous_draw_keys_;
+  // Index of each draw's match in the previous frame, or UINT32_MAX.
+  std::vector<uint32_t> pt_draw_previous_index_;
+  // View space vertex position samples (xyz) of the draws, per draw the
+  // first sample and the count, this and the previous frame's.
+  static constexpr uint32_t kPathTracingDrawVertexSamples = 24;
+  std::vector<float> pt_draw_samples_;
+  std::vector<uint32_t> pt_draw_sample_ranges_;
+  std::vector<float> pt_previous_draw_samples_;
+  std::vector<uint32_t> pt_previous_draw_sample_ranges_;
+  // The world space the denoisers work in: fixed to the scenery, anchored at
+  // where the camera was when tracking started. View to world rotation
+  // (row-major 3x3) and translation, this and the previous frame's.
+  double pt_view_to_world_rotation_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  double pt_view_to_world_translation_[3] = {};
+  double pt_previous_view_to_world_rotation_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  double pt_previous_view_to_world_translation_[3] = {};
+  // Whether this frame's camera is known relative to the previous frame's
+  // (otherwise the world space restarts, and so do the histories).
+  bool pt_camera_tracked_ = false;
+  bool pt_camera_tracked_initialized_ = false;
+  uint32_t pt_camera_draws_agreeing_ = 0;
+  uint32_t pt_world_resets_ = 0;
   uint32_t pt_draw_triangles_ = 0;
   std::vector<xenos::xe_gpu_texture_fetch_t> pt_texture_fetches_;
   std::unordered_map<uint64_t, uint32_t> pt_texture_slots_;

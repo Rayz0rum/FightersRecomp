@@ -7,8 +7,9 @@
 // Header of the material buffer: float at 64 - bloom strength, at 76 -
 // threshold (the rest isn't used here).
 ByteAddressBuffer pt_materials : register(t7);
-Texture2D<float4> pt_source : register(t4);
-RWTexture2D<float4> pt_bloom_out : register(u2);
+// Local pixels (the HDR color, or the quarter resolution bloom).
+Texture2D<float4> pt_source : register(t0, space3);
+RWTexture2D<float4> pt_bloom_out : register(u0, space3);
 
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
@@ -22,7 +23,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     float3 sum = float3(0.0, 0.0, 0.0);
     [unroll] for (uint y = 0; y < 4; ++y) {
       [unroll] for (uint x = 0; x < 4; ++x) {
-        uint2 pixel = min(pt_rect_min + id.xy * 4 + uint2(x, y), pt_rect_max - 1);
+        uint2 pixel = min(id.xy * 4 + uint2(x, y), rect_size - 1);
         float4 hdr = pt_source[pixel];
         sum += max(hdr.rgb - threshold, 0.0) * hdr.a;
       }

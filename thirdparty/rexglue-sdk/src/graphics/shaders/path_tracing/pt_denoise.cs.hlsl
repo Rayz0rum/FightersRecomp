@@ -1,16 +1,16 @@
-// One pass of an edge-aware (depth and normal) filter of the traced lighting.
-// Run a few times with increasing tap spacing (a-trous): first densely over
-// the 4x4 sampling pattern, then wider for the remaining noise.
+// One pass of the built-in edge-aware (depth and normal) filter of the traced
+// lighting. Run a few times with increasing tap spacing (a-trous).
 
 #include "pt_common.hlsli"
 
-Texture2D<float4> pt_gbuffer : register(t3);
-Texture2D<float4> pt_lighting : register(t4);
-RWTexture2D<float4> pt_lighting_out : register(u2);
+// All local pixels.
+Texture2D<float4> pt_gbuffer : register(t0, space3);
+Texture2D<float4> pt_lighting : register(t1, space3);
+RWTexture2D<float4> pt_lighting_out : register(u0, space3);
 
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
-  int2 pixel = int2(pt_rect_min + id.xy);
+  int2 pixel = int2(id.xy);
   if (!PTInRect(pixel)) {
     return;
   }

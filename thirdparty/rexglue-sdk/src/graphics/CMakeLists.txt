@@ -83,6 +83,7 @@ if(REXGLUE_USE_D3D12)
         d3d12/deferred_command_list.cpp
         d3d12/pipeline_cache.cpp
         d3d12/path_tracer.cpp
+        d3d12/path_tracer_denoisers.cpp
     )
 endif()
 
@@ -157,5 +158,30 @@ if(REXGLUE_USE_D3D12)
         d3d12
         dxgi
         dxguid
+    )
+
+    # Path tracing denoisers: NRD (loaded at runtime), DLSS Ray Reconstruction
+    # (NGX, linked), FSR Ray Regeneration (FidelityFX API loader, loaded at
+    # runtime). Their runtime libraries go next to the executable (see
+    # rexglue_configure_target).
+    target_include_directories(rexgpu-xenos PRIVATE
+        ${REXGLUE_ROOT}/thirdparty/NRD/Include
+        ${REXGLUE_ROOT}/thirdparty/dlss/include
+        ${REXGLUE_ROOT}/thirdparty/fidelityfx
+    )
+    target_link_libraries(rexgpu-xenos PRIVATE
+        ${REXGLUE_ROOT}/thirdparty/dlss/lib/nvsdk_ngx_d.lib
+    )
+    set(REXGPU_XENOS_RUNTIME_FILES
+        ${REXGLUE_ROOT}/thirdparty/nrd-bin/NRD.dll
+        ${REXGLUE_ROOT}/thirdparty/dlss/redist/nvngx_dlssd.dll
+        ${REXGLUE_ROOT}/thirdparty/fidelityfx/signedbin/amd_fidelityfx_loader_dx12.dll
+        ${REXGLUE_ROOT}/thirdparty/fidelityfx/signedbin/amd_fidelityfx_denoiser_dx12.dll
+        CACHE INTERNAL "Runtime libraries the xenos GPU plugin loads")
+    add_custom_command(TARGET rexgpu-xenos POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${REXGPU_XENOS_RUNTIME_FILES}
+            $<TARGET_FILE_DIR:rexgpu-xenos>
+        VERBATIM
     )
 endif()
