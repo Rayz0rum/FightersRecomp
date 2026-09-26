@@ -583,6 +583,7 @@ class D3D12CommandProcessor : public CommandProcessor {
   static uint32_t PathTracingStreamOutTriangles(
       const PrimitiveProcessor::ProcessingResult& primitive_processing, bool rasterization_done,
       bool has_pixel_shader);
+  static uint64_t PathTracingFetchKey(const xenos::xe_gpu_texture_fetch_t& fetch);
   uint32_t PathTracingTextureSlot(const xenos::xe_gpu_texture_fetch_t& fetch);
   // Called once per presented guest frame from IssueSwap. Returns the texture
   // to present instead of the swap texture (with its SRV description), or
@@ -604,15 +605,19 @@ class D3D12CommandProcessor : public CommandProcessor {
     kMaterials,
     kAttributes,
     kRWAttributes,
+    kPreviousVertices,
     kTexture0,
     kTexture1,
     kTexture2,
     kTexture3,
     kTexture4,
-    // t0 in space 2.
+    // t0 and t1 in space 2.
     kTexture5,
+    kTexture6,
     kRWTexture0,
     kRWTexture1,
+    // u5.
+    kRWTexture2,
     // Unbounded, from the start of the view heap.
     kMaterialTextures,
 
@@ -631,6 +636,11 @@ class D3D12CommandProcessor : public CommandProcessor {
   static constexpr uint32_t kPathTracingCounterSize = (kPathTracingMaxDraws + 1) * 8;
   // Material header (80 bytes) and the draws (32 bytes each).
   static constexpr uint32_t kPathTracingMaterialUploadSize = 80 + kPathTracingMaxDraws * 32;
+  // Per frame: constant buffers for the passes, then the materials.
+  static constexpr uint32_t kPathTracingConstantSlots = 16;
+  static constexpr uint32_t kPathTracingConstantsUploadSize = kPathTracingConstantSlots * 256;
+  static constexpr uint32_t kPathTracingFrameUploadSize =
+      kPathTracingConstantsUploadSize + ((kPathTracingMaterialUploadSize + 255) & ~255u);
   // Two regions: solid triangles (opaque geometry of the acceleration
   // structure) and alpha-tested ones.
   static constexpr uint32_t kPathTracingVertexRegionSize = kPathTracingMaxTriangles * 3 * 12;
@@ -643,8 +653,9 @@ class D3D12CommandProcessor : public CommandProcessor {
   // beyond the maximum.
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_capture_counter_;
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_zero_upload_;
-  // View space triangles for the acceleration structure.
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_vertex_buffer_;
+  // View space triangles for the acceleration structure, this and the
+  // previous frame's (pt_history_index_).
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_vertex_buffers_[2];
   // Per-frame statistics (ground normal, background color, average lighting)
   // for 2 frames, see pt_common.hlsli.
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_stats_buffer_;
@@ -657,12 +668,23 @@ class D3D12CommandProcessor : public CommandProcessor {
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_convert_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_primary_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_lighting_pipeline_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_temporal_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_denoise_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_resolve_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_bloom_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pt_composite_pipeline_;
-  // Normal and view depth of the primary surface of every pixel.
-  Microsoft::WRL::ComPtr<ID3D12Resource> pt_gbuffer_;
+  // Normal and view depth of the primary surface of every pixel, this and
+  // the previous frame's.
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_gbuffers_[2];
+  // Where the surfaces were in the previous frame.
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_motion_;
+  // Temporally accumulated lighting, this and the previous frame's.
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_irradiance_history_[2];
+  Microsoft::WRL::ComPtr<ID3D12Resource> pt_specular_history_[2];
+  uint32_t pt_history_index_ = 0;
+  bool pt_rendered_this_frame_ = false;
+  bool pt_rendered_previous_frame_ = false;
+  float pt_previous_projection_[2] = {};
   // Surface colors (the scene without the game's own shadows).
   Microsoft::WRL::ComPtr<ID3D12Resource> pt_albedo_;
   // Traced lighting and the denoiser's intermediate.
@@ -705,7 +727,8 @@ class D3D12CommandProcessor : public CommandProcessor {
     // Alpha test: passes if texel alpha * scale - bias >= 0.
     float alpha_scale;
     float alpha_bias;
-    uint32_t padding;
+    // The same draw's first triangle in the previous frame, for motion.
+    uint32_t previous_first;
   };
   enum PathTracingDrawFlags : uint32_t {
     // Solid scene geometry.
@@ -718,6 +741,10 @@ class D3D12CommandProcessor : public CommandProcessor {
     kPathTracingDrawAlphaTest = 1 << 3,
   };
   std::vector<PathTracingDraw> pt_draws_;
+  // Identify draws across frames (texture, color table, size, flags).
+  std::vector<uint64_t> pt_draw_keys_;
+  std::vector<PathTracingDraw> pt_previous_draws_;
+  std::vector<uint64_t> pt_previous_draw_keys_;
   uint32_t pt_draw_triangles_ = 0;
   std::vector<xenos::xe_gpu_texture_fetch_t> pt_texture_fetches_;
   std::unordered_map<uint64_t, uint32_t> pt_texture_slots_;

@@ -56,6 +56,13 @@ cbuffer PTConstants : register(b0) {
   float pt_max_distance;
   // GGX roughness of the surfaces.
   float pt_roughness;
+  // For varying the sampling pattern between frames.
+  uint pt_frame_index;
+  // Whether the previous frame's surfaces and lighting can be reused.
+  uint pt_history_valid;
+  // Smallest weight of the new samples in the temporal accumulation.
+  float pt_temporal_alpha;
+  float pt_specular_temporal_alpha;
 };
 
 // pt_flags.
@@ -102,6 +109,12 @@ float2 PTProjectToPixel(float3 p) {
 
 bool PTInRect(int2 pixel) {
   return all(pixel >= int2(pt_rect_min)) && all(pixel < int2(pt_rect_max));
+}
+
+// Offset of this frame's sampling pattern (R2 sequence), for accumulating
+// different samples over frames.
+float2 PTFrameOffset() {
+  return frac(float2(0.7548776662, 0.5698402910) * float(pt_frame_index & 1023));
 }
 
 float PTRadicalInverse(uint bits) {

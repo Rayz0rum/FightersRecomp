@@ -13,7 +13,8 @@
 // Header: float4 c254, c255, c1, c0 (the shader's constants), uint4 (0, draw
 // count, whether the materials are valid, 0). Then per draw: uint4 (first
 // triangle, triangle count, texture descriptor, flags), uint4 (color table
-// descriptor, alpha test scale and bias, 0).
+// descriptor, alpha test scale and bias, the draw's first triangle in the
+// previous frame or 0xFFFFFFFF).
 ByteAddressBuffer pt_materials : register(t7);
 // Per triangle: float2 texture coordinates x3, float color table row, uint
 // draw index, float3 the game's lighting factors of the vertices, 0.

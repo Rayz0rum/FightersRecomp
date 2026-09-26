@@ -90,6 +90,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     uint cell = (pixel.x & 3) | ((pixel.y & 3) << 2);
     uint ray_count = max(pt_ray_count, 1u);
     float sample_count_inv = 1.0 / float(16 * ray_count);
+    // Different samples every frame for the temporal accumulation.
+    float2 frame_offset = PTFrameOffset();
 
     float3 view = -normalize(position);
     float n_dot_v = max(dot(normal, view), 1.0e-3);
@@ -106,7 +108,8 @@ void main(uint3 id : SV_DispatchThreadID) {
       uint unshadowed = 0;
       for (uint i = 0; i < ray_count; ++i) {
         uint k = cell + 16 * i;
-        float2 u = float2((float(k) + 0.5) * sample_count_inv, PTRadicalInverse(k));
+        float2 u = frac(float2((float(k) + 0.5) * sample_count_inv, PTRadicalInverse(k)) +
+                        frame_offset);
         float phi = 6.28318530718 * u.y;
         float r = sqrt(u.x) * pt_sun_softness;
         float3 direction =
@@ -137,7 +140,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     bool materials = PTMaterialsValid();
     for (uint i = 0; i < ray_count; ++i) {
       uint k = cell + 16 * i;
-      float2 u = float2((float(k) + 0.5) * sample_count_inv, PTRadicalInverse(k));
+      float2 u = frac(float2((float(k) + 0.5) * sample_count_inv, PTRadicalInverse(k)) +
+                      frame_offset);
       float phi = 6.28318530718 * u.y;
       float r = sqrt(u.x);
       float3 direction = tangent * (r * cos(phi)) + bitangent * (r * sin(phi)) +
@@ -188,7 +192,8 @@ void main(uint3 id : SV_DispatchThreadID) {
 
     // Glossy reflection of the scene: one GGX-distributed ray.
     if (pt_specular > 0.0) {
-      float2 u = float2((float(cell) + 0.5) * (1.0 / 16.0), PTRadicalInverse(cell));
+      float2 u = frac(float2((float(cell) + 0.5) * (1.0 / 16.0), PTRadicalInverse(cell)) +
+                      frame_offset);
       // Microfacet normal from the GGX distribution.
       float cos_theta = sqrt((1.0 - u.x) / (1.0 + (alpha2 - 1.0) * u.x));
       float sin_theta = sqrt(max(1.0 - cos_theta * cos_theta, 0.0));

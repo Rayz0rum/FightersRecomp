@@ -26,6 +26,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <unordered_map>
+#include <vector>
 
 #include <rex/cvar.h>
 #include <rex/graphics/d3d12/command_processor.h>
@@ -96,6 +98,14 @@ REXCVAR_DEFINE_DOUBLE(path_tracing_bloom, 0.06, "GPU/Path Tracing",
                       "Strength of the glow around bright areas");
 REXCVAR_DEFINE_DOUBLE(path_tracing_bloom_threshold, 1.4, "GPU/Path Tracing",
                       "Exposed brightness above which areas glow");
+REXCVAR_DEFINE_BOOL(path_tracing_temporal, true, "GPU/Path Tracing",
+                    "Accumulate the lighting over frames (with motion from the captured "
+                    "geometry) for less noise");
+REXCVAR_DEFINE_DOUBLE(path_tracing_temporal_alpha, 0.15, "GPU/Path Tracing",
+                      "Smallest weight of each frame's lighting in the accumulation (lower - "
+                      "smoother, more lag)");
+REXCVAR_DEFINE_DOUBLE(path_tracing_specular_temporal_alpha, 0.3, "GPU/Path Tracing",
+                      "Smallest weight of each frame's reflections in the accumulation");
 REXCVAR_DEFINE_DOUBLE(path_tracing_max_distance, 120.0, "GPU/Path Tracing",
                       "Surfaces further than this in view space units (sky, clouds, distant "
                       "scenery) keep their original look");
@@ -121,6 +131,7 @@ namespace shaders {
 #include "../shaders/bytecode/d3d12_6_5/pt_lighting_cs.h"
 #include "../shaders/bytecode/d3d12_6_5/pt_primary_cs.h"
 #include "../shaders/bytecode/d3d12_6_5/pt_resolve_cs.h"
+#include "../shaders/bytecode/d3d12_6_5/pt_temporal_cs.h"
 }  // namespace shaders
 
 namespace {
@@ -156,8 +167,12 @@ struct PathTracingConstants {
   float sky_saturation;
   float max_distance;
   float roughness;
+  uint32_t frame_index;
+  uint32_t history_valid;
+  float temporal_alpha;
+  float specular_temporal_alpha;
 };
-static_assert(sizeof(PathTracingConstants) == 40 * sizeof(uint32_t));
+static_assert(sizeof(PathTracingConstants) == 44 * sizeof(uint32_t));
 
 constexpr DXGI_FORMAT kGBufferFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
 constexpr DXGI_FORMAT kLightingFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -258,14 +273,16 @@ bool D3D12CommandProcessor::InitializePathTracing() {
                      D3D12_HEAP_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ,
                      pt_zero_upload_) ||
       !create_buffer(kPathTracingVertexBufferSize, kUAV, heap_default, heap_flags,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS, pt_vertex_buffer_) ||
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS, pt_vertex_buffers_[0]) ||
+      !create_buffer(kPathTracingVertexBufferSize, kUAV, heap_default, heap_flags,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS, pt_vertex_buffers_[1]) ||
       // Zeroed - the first frame reads the statistics without clearing them.
       !create_buffer(256, kUAV, heap_default, D3D12_HEAP_FLAG_NONE,
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS, pt_stats_buffer_) ||
       !create_buffer(uint64_t(kPathTracingMaxTriangles) * kPathTracingAttributeSize, kUAV,
                      heap_default, heap_flags, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                      pt_attribute_buffer_) ||
-      !create_buffer(uint64_t(kPathTracingMaterialUploadSize) * kQueueFrames,
+      !create_buffer(uint64_t(kPathTracingFrameUploadSize) * kQueueFrames,
                      D3D12_RESOURCE_FLAG_NONE, heap_upload, D3D12_HEAP_FLAG_NONE,
                      D3D12_RESOURCE_STATE_GENERIC_READ, pt_material_upload_) ||
       !create_buffer(blas_info.ResultDataMaxSizeInBytes, kUAV, heap_default, heap_flags,
@@ -319,10 +336,14 @@ bool D3D12CommandProcessor::InitializePathTracing() {
     parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     switch (PathTracingRootParameter(i)) {
       case PathTracingRootParameter::kConstants:
-        parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        parameter.Constants.ShaderRegister = 0;
-        parameter.Constants.RegisterSpace = 0;
-        parameter.Constants.Num32BitValues = sizeof(PathTracingConstants) / sizeof(uint32_t);
+        parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        parameter.Descriptor.ShaderRegister = 0;
+        parameter.Descriptor.RegisterSpace = 0;
+        break;
+      case PathTracingRootParameter::kPreviousVertices:
+        parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        parameter.Descriptor.ShaderRegister = 9;
+        parameter.Descriptor.RegisterSpace = 0;
         break;
       case PathTracingRootParameter::kBuffer0:
       case PathTracingRootParameter::kBuffer1:
@@ -359,16 +380,20 @@ bool D3D12CommandProcessor::InitializePathTracing() {
         parameter.DescriptorTable.pDescriptorRanges = &range;
       } break;
       default: {
-        // t2...t6, t0 in space 2, u2...u3.
+        // t2...t6, t0...t1 in space 2, u2, u3, u5.
         UINT table_index = i - UINT(PathTracingRootParameter::kTexture0);
         bool uav = i >= UINT(PathTracingRootParameter::kRWTexture0);
-        bool space_2 = PathTracingRootParameter(i) == PathTracingRootParameter::kTexture5;
+        bool space_2 = i >= UINT(PathTracingRootParameter::kTexture5) && !uav;
         D3D12_DESCRIPTOR_RANGE& range = ranges[i];
         range.RangeType = uav ? D3D12_DESCRIPTOR_RANGE_TYPE_UAV : D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         range.NumDescriptors = 1;
-        range.BaseShaderRegister =
-            uav ? 2 + (i - UINT(PathTracingRootParameter::kRWTexture0))
-                : (space_2 ? 0 : 2 + table_index);
+        if (uav) {
+          UINT uav_index = i - UINT(PathTracingRootParameter::kRWTexture0);
+          range.BaseShaderRegister = uav_index < 2 ? 2 + uav_index : 5;
+        } else {
+          range.BaseShaderRegister =
+              space_2 ? i - UINT(PathTracingRootParameter::kTexture5) : 2 + table_index;
+        }
         range.RegisterSpace = space_2 ? 2 : 0;
         range.OffsetInDescriptorsFromTableStart = 0;
         parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -409,6 +434,7 @@ bool D3D12CommandProcessor::InitializePathTracing() {
       {pt_convert_pipeline_, shaders::pt_convert_cs, sizeof(shaders::pt_convert_cs)},
       {pt_primary_pipeline_, shaders::pt_primary_cs, sizeof(shaders::pt_primary_cs)},
       {pt_lighting_pipeline_, shaders::pt_lighting_cs, sizeof(shaders::pt_lighting_cs)},
+      {pt_temporal_pipeline_, shaders::pt_temporal_cs, sizeof(shaders::pt_temporal_cs)},
       {pt_denoise_pipeline_, shaders::pt_denoise_cs, sizeof(shaders::pt_denoise_cs)},
       {pt_resolve_pipeline_, shaders::pt_resolve_cs, sizeof(shaders::pt_resolve_cs)},
       {pt_bloom_pipeline_, shaders::pt_bloom_cs, sizeof(shaders::pt_bloom_cs)},
@@ -439,13 +465,19 @@ void D3D12CommandProcessor::ShutdownPathTracing() {
   pt_lighting_temp_.Reset();
   pt_lighting_.Reset();
   pt_albedo_.Reset();
-  pt_gbuffer_.Reset();
+  for (uint32_t i = 0; i < 2; ++i) {
+    pt_gbuffers_[i].Reset();
+    pt_irradiance_history_[i].Reset();
+    pt_specular_history_[i].Reset();
+  }
+  pt_motion_.Reset();
   pt_texture_width_ = 0;
   pt_texture_height_ = 0;
   pt_composite_pipeline_.Reset();
   pt_denoise_pipeline_.Reset();
   pt_resolve_pipeline_.Reset();
   pt_bloom_pipeline_.Reset();
+  pt_temporal_pipeline_.Reset();
   pt_lighting_pipeline_.Reset();
   pt_primary_pipeline_.Reset();
   pt_convert_pipeline_.Reset();
@@ -461,7 +493,8 @@ void D3D12CommandProcessor::ShutdownPathTracing() {
     pt_material_upload_mapping_ = nullptr;
   }
   pt_material_upload_.Reset();
-  pt_vertex_buffer_.Reset();
+  pt_vertex_buffers_[1].Reset();
+  pt_vertex_buffers_[0].Reset();
   pt_zero_upload_.Reset();
   pt_capture_counter_.Reset();
   pt_capture_buffer_.Reset();
@@ -492,10 +525,14 @@ uint32_t D3D12CommandProcessor::PathTracingStreamOutTriangles(
   }
 }
 
+uint64_t D3D12CommandProcessor::PathTracingFetchKey(const xenos::xe_gpu_texture_fetch_t& fetch) {
+  return (uint64_t(fetch.dword_1) << 32 | fetch.dword_2) ^
+         (uint64_t(fetch.dword_3) << 17 | uint64_t(fetch.dword_0) << 3) ^
+         (uint64_t(fetch.dword_4) << 41 | fetch.dword_5);
+}
+
 uint32_t D3D12CommandProcessor::PathTracingTextureSlot(const xenos::xe_gpu_texture_fetch_t& fetch) {
-  uint64_t key = (uint64_t(fetch.dword_1) << 32 | fetch.dword_2) ^
-                 (uint64_t(fetch.dword_3) << 17 | uint64_t(fetch.dword_0) << 3) ^
-                 (uint64_t(fetch.dword_4) << 41 | fetch.dword_5);
+  uint64_t key = PathTracingFetchKey(fetch);
   auto it = pt_texture_slots_.find(key);
   if (it != pt_texture_slots_.end()) {
     return it->second;
@@ -529,6 +566,7 @@ void D3D12CommandProcessor::UpdatePathTracingCapture(
     pt_captured_this_frame_ = true;
     pt_viewport_ = viewport_info;
     pt_draws_.clear();
+    pt_draw_keys_.clear();
     pt_draw_triangles_ = 0;
     pt_texture_fetches_.clear();
     pt_texture_slots_.clear();
@@ -606,8 +644,14 @@ void D3D12CommandProcessor::UpdatePathTracingCapture(
     view.SizeInBytes = triangles * kTriangleSize;
     view.BufferFilledSizeLocation =
         pt_capture_counter_->GetGPUVirtualAddress() + pt_draws_.size() * sizeof(uint64_t);
-    pt_draws_.push_back(
-        {pt_draw_triangles_, triangles, texture, flags, palette, alpha_scale, alpha_bias, 0});
+    pt_draws_.push_back({pt_draw_triangles_, triangles, texture, flags, palette, alpha_scale,
+                         alpha_bias, UINT32_MAX});
+    uint64_t key = uint64_t(triangles) << 40 ^ uint64_t(flags) << 56;
+    if (flags & kPathTracingDrawMaterial) {
+      key ^= PathTracingFetchKey(regs.GetTextureFetch(0)) ^
+             PathTracingFetchKey(regs.GetTextureFetch(1)) * 31;
+    }
+    pt_draw_keys_.push_back(key);
     pt_draw_triangles_ += triangles;
   } else {
     view.BufferLocation = pt_capture_buffer_->GetGPUVirtualAddress() +
@@ -645,48 +689,50 @@ bool D3D12CommandProcessor::IsPathTracingAlbedoDraw(const Shader& pixel_shader,
 }
 
 bool D3D12CommandProcessor::EnsurePathTracingTextures(uint32_t width, uint32_t height) {
-  if (pt_gbuffer_ && width <= pt_texture_width_ && height <= pt_texture_height_) {
+  if (pt_gbuffers_[0] && width <= pt_texture_width_ && height <= pt_texture_height_) {
     return true;
   }
-  for (Microsoft::WRL::ComPtr<ID3D12Resource>* texture :
-       {std::addressof(pt_gbuffer_), std::addressof(pt_albedo_), std::addressof(pt_lighting_),
-        std::addressof(pt_lighting_temp_), std::addressof(pt_specular_),
-        std::addressof(pt_hdr_), std::addressof(pt_bloom_a_), std::addressof(pt_bloom_b_),
-        std::addressof(pt_output_)}) {
-    if (*texture) {
-      pt_retired_textures_.emplace_back(submission_current_, std::move(*texture));
-    }
-  }
-  uint32_t new_width = std::max(width, pt_texture_width_);
-  uint32_t new_height = std::max(height, pt_texture_height_);
-  const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
-  ID3D12Device* device = provider.GetDevice();
-  D3D12_RESOURCE_DESC desc = {};
-  desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-  desc.Width = new_width;
-  desc.Height = new_height;
-  desc.DepthOrArraySize = 1;
-  desc.MipLevels = 1;
-  desc.SampleDesc.Count = 1;
-  desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-  desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
   struct PathTracingTexture {
     Microsoft::WRL::ComPtr<ID3D12Resource>* resource;
     DXGI_FORMAT format;
     bool quarter;
   };
   PathTracingTexture textures[] = {
-      {std::addressof(pt_gbuffer_), kGBufferFormat, false},
+      {std::addressof(pt_gbuffers_[0]), kGBufferFormat, false},
+      {std::addressof(pt_gbuffers_[1]), kGBufferFormat, false},
+      {std::addressof(pt_motion_), kGBufferFormat, false},
       {std::addressof(pt_albedo_), kLightingFormat, false},
       {std::addressof(pt_lighting_), kLightingFormat, false},
       {std::addressof(pt_lighting_temp_), kLightingFormat, false},
       {std::addressof(pt_specular_), kLightingFormat, false},
+      {std::addressof(pt_irradiance_history_[0]), kLightingFormat, false},
+      {std::addressof(pt_irradiance_history_[1]), kLightingFormat, false},
+      {std::addressof(pt_specular_history_[0]), kLightingFormat, false},
+      {std::addressof(pt_specular_history_[1]), kLightingFormat, false},
       {std::addressof(pt_hdr_), kLightingFormat, false},
       {std::addressof(pt_bloom_a_), kLightingFormat, true},
       {std::addressof(pt_bloom_b_), kLightingFormat, true},
       {std::addressof(pt_output_), kOutputFormat, false},
   };
-  for (auto& texture : textures) {
+  for (PathTracingTexture& texture : textures) {
+    if (*texture.resource) {
+      pt_retired_textures_.emplace_back(submission_current_, std::move(*texture.resource));
+    }
+  }
+  // The history is lost.
+  pt_rendered_previous_frame_ = false;
+  uint32_t new_width = std::max(width, pt_texture_width_);
+  uint32_t new_height = std::max(height, pt_texture_height_);
+  const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
+  ID3D12Device* device = provider.GetDevice();
+  D3D12_RESOURCE_DESC desc = {};
+  desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  desc.DepthOrArraySize = 1;
+  desc.MipLevels = 1;
+  desc.SampleDesc.Count = 1;
+  desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+  desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+  for (PathTracingTexture& texture : textures) {
     desc.Format = texture.format;
     desc.Width = texture.quarter ? (new_width + 3) / 4 : new_width;
     desc.Height = texture.quarter ? (new_height + 3) / 4 : new_height;
@@ -695,15 +741,9 @@ bool D3D12CommandProcessor::EnsurePathTracingTextures(uint32_t width, uint32_t h
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
             IID_PPV_ARGS(texture.resource->ReleaseAndGetAddressOf())))) {
       REXGPU_ERROR("Path tracing: failed to create {}x{} textures", new_width, new_height);
-      pt_gbuffer_.Reset();
-      pt_albedo_.Reset();
-      pt_lighting_.Reset();
-      pt_lighting_temp_.Reset();
-      pt_specular_.Reset();
-      pt_hdr_.Reset();
-      pt_bloom_a_.Reset();
-      pt_bloom_b_.Reset();
-      pt_output_.Reset();
+      for (PathTracingTexture& created : textures) {
+        created.resource->Reset();
+      }
       pt_texture_width_ = 0;
       pt_texture_height_ = 0;
       return false;
@@ -759,8 +799,7 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   if (pt_scene_fetch_valid_) {
     D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc;
     xenos::TextureFormat format;
-    ID3D12Resource* texture =
-        texture_cache_->RequestTexture(pt_scene_fetch_, srv_desc, format);
+    ID3D12Resource* texture = texture_cache_->RequestTexture(pt_scene_fetch_, srv_desc, format);
     if (texture) {
       D3D12_RESOURCE_DESC desc = texture->GetDesc();
       if (desc.Width >= rect_max[0] && desc.Height >= rect_max[1]) {
@@ -770,7 +809,7 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
     }
   }
 
-  // Materials, if the captured triangles can be matched with their draws.
+  // Materials.
   bool materials = pt_material_found_;
   struct MaterialTexture {
     ID3D12Resource* resource;
@@ -786,12 +825,39 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
     }
   }
 
+  // Reusing the previous frame: the same draws are found in it for motion.
+  // The history is double-buffered, "current" being written this frame.
+  uint32_t current = pt_history_index_ ^ 1, previous = pt_history_index_;
+  bool history_valid = REXCVAR_GET(path_tracing_temporal) && pt_rendered_previous_frame_ &&
+                       materials && pt_previous_projection_[0] == pt_projection_[0] &&
+                       pt_previous_projection_[1] == pt_projection_[1];
+  if (history_valid) {
+    std::unordered_map<uint64_t, std::vector<uint32_t>> previous_draws;
+    for (size_t i = 0; i < pt_previous_draws_.size(); ++i) {
+      previous_draws[pt_previous_draw_keys_[i]].push_back(pt_previous_draws_[i].triangle_offset);
+    }
+    std::unordered_map<uint64_t, uint32_t> previous_draws_used;
+    for (size_t i = 0; i < pt_draws_.size(); ++i) {
+      auto it = previous_draws.find(pt_draw_keys_[i]);
+      if (it == previous_draws.end()) {
+        continue;
+      }
+      uint32_t& used = previous_draws_used[pt_draw_keys_[i]];
+      if (used < it->second.size()) {
+        pt_draws_[i].previous_first = it->second[used++];
+      }
+    }
+  }
+
   // All descriptors at once, so they're in the same heap.
   enum Descriptor {
     kFrameSRV,
     kColorSRV,
     kGBufferSRV,
     kGBufferUAV,
+    kPreviousGBufferSRV,
+    kMotionSRV,
+    kMotionUAV,
     kAlbedoSRV,
     kAlbedoUAV,
     kLightingSRV,
@@ -800,6 +866,12 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
     kLightingTempUAV,
     kSpecularSRV,
     kSpecularUAV,
+    kIrradianceHistorySRV,
+    kIrradianceHistoryUAV,
+    kPreviousIrradianceHistorySRV,
+    kSpecularHistorySRV,
+    kSpecularHistoryUAV,
+    kPreviousSpecularHistorySRV,
     kHdrSRV,
     kHdrUAV,
     kBloomASRV,
@@ -809,8 +881,7 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
     kOutputUAV,
     kMaterialTexturesStart,
   };
-  uint32_t descriptor_count =
-      uint32_t(kMaterialTexturesStart + material_textures.size());
+  uint32_t descriptor_count = uint32_t(kMaterialTexturesStart + material_textures.size());
   std::vector<ui::d3d12::util::DescriptorCpuGpuHandlePair> descriptors(descriptor_count);
   if (!RequestOneUseSingleViewDescriptors(descriptor_count, descriptors.data())) {
     return nullptr;
@@ -834,8 +905,14 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
     uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
     device->CreateUnorderedAccessView(texture, nullptr, &uav_desc, descriptors[descriptor].first);
   };
-  create_srv(pt_gbuffer_.Get(), kGBufferFormat, kGBufferSRV);
-  create_uav(pt_gbuffer_.Get(), kGBufferFormat, kGBufferUAV);
+  ID3D12Resource* gbuffer = pt_gbuffers_[current].Get();
+  ID3D12Resource* irradiance_history = pt_irradiance_history_[current].Get();
+  ID3D12Resource* specular_history = pt_specular_history_[current].Get();
+  create_srv(gbuffer, kGBufferFormat, kGBufferSRV);
+  create_uav(gbuffer, kGBufferFormat, kGBufferUAV);
+  create_srv(pt_gbuffers_[previous].Get(), kGBufferFormat, kPreviousGBufferSRV);
+  create_srv(pt_motion_.Get(), kGBufferFormat, kMotionSRV);
+  create_uav(pt_motion_.Get(), kGBufferFormat, kMotionUAV);
   create_srv(pt_albedo_.Get(), kLightingFormat, kAlbedoSRV);
   create_uav(pt_albedo_.Get(), kLightingFormat, kAlbedoUAV);
   create_srv(pt_lighting_.Get(), kLightingFormat, kLightingSRV);
@@ -844,6 +921,13 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   create_uav(pt_lighting_temp_.Get(), kLightingFormat, kLightingTempUAV);
   create_srv(pt_specular_.Get(), kLightingFormat, kSpecularSRV);
   create_uav(pt_specular_.Get(), kLightingFormat, kSpecularUAV);
+  create_srv(irradiance_history, kLightingFormat, kIrradianceHistorySRV);
+  create_uav(irradiance_history, kLightingFormat, kIrradianceHistoryUAV);
+  create_srv(pt_irradiance_history_[previous].Get(), kLightingFormat,
+             kPreviousIrradianceHistorySRV);
+  create_srv(specular_history, kLightingFormat, kSpecularHistorySRV);
+  create_uav(specular_history, kLightingFormat, kSpecularHistoryUAV);
+  create_srv(pt_specular_history_[previous].Get(), kLightingFormat, kPreviousSpecularHistorySRV);
   create_srv(pt_hdr_.Get(), kLightingFormat, kHdrSRV);
   create_uav(pt_hdr_.Get(), kLightingFormat, kHdrUAV);
   create_srv(pt_bloom_a_.Get(), kLightingFormat, kBloomASRV);
@@ -861,12 +945,16 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
     return uint32_t((descriptors[descriptor].second.ptr - material_table.ptr) /
                     view_descriptor_size);
   };
-  uint8_t* material_upload =
-      pt_material_upload_mapping_ +
-      size_t(frame_current_ % kQueueFrames) * kPathTracingMaterialUploadSize;
-  D3D12_GPU_VIRTUAL_ADDRESS material_upload_address =
+
+  // This frame's upload: constant buffers for the passes, then the materials.
+  uint32_t upload_frame = uint32_t(frame_current_ % kQueueFrames);
+  uint8_t* upload = pt_material_upload_mapping_ + size_t(upload_frame) * kPathTracingFrameUploadSize;
+  D3D12_GPU_VIRTUAL_ADDRESS upload_address =
       pt_material_upload_->GetGPUVirtualAddress() +
-      (frame_current_ % kQueueFrames) * kPathTracingMaterialUploadSize;
+      uint64_t(upload_frame) * kPathTracingFrameUploadSize;
+  uint8_t* material_upload = upload + kPathTracingConstantsUploadSize;
+  D3D12_GPU_VIRTUAL_ADDRESS material_upload_address =
+      upload_address + kPathTracingConstantsUploadSize;
   {
     uint32_t header[20] = {};
     std::memcpy(header, pt_material_constants_, sizeof(pt_material_constants_));
@@ -941,25 +1029,46 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   constants.debug_view = uint32_t(std::clamp(REXCVAR_GET(path_tracing_debug_view), 0, 7));
   constants.specular = std::max(float(REXCVAR_GET(path_tracing_specular)), 0.0f);
   constants.roughness = std::clamp(float(REXCVAR_GET(path_tracing_roughness)), 0.02f, 1.0f);
+  constants.frame_index = pt_frame_;
+  constants.history_valid = history_valid ? 1 : 0;
+  constants.temporal_alpha =
+      std::clamp(float(REXCVAR_GET(path_tracing_temporal_alpha)), 0.01f, 1.0f);
+  constants.specular_temporal_alpha =
+      std::clamp(float(REXCVAR_GET(path_tracing_specular_temporal_alpha)), 0.01f, 1.0f);
+
+  // Each set of constants goes into its own slot of the upload.
+  uint32_t constant_slot = 0;
+  auto set_constants = [&]() {
+    assert_true(constant_slot < kPathTracingConstantSlots);
+    std::memcpy(upload + constant_slot * 256, &constants, sizeof(constants));
+    deferred_command_list_.D3DSetComputeRootConstantBufferView(
+        UINT(PathTracingRootParameter::kConstants), upload_address + constant_slot * 256);
+    ++constant_slot;
+  };
+  auto set_table = [&](PathTracingRootParameter parameter, Descriptor descriptor) {
+    deferred_command_list_.D3DSetComputeRootDescriptorTable(UINT(parameter),
+                                                            descriptors[descriptor].second);
+  };
 
   deferred_command_list_.D3DSetComputeRootSignature(pt_root_signature_.Get());
-  deferred_command_list_.D3DSetComputeRoot32BitConstants(
-      UINT(PathTracingRootParameter::kConstants), sizeof(constants) / sizeof(uint32_t),
-      &constants, 0);
+  set_constants();
   deferred_command_list_.D3DSetComputeRootShaderResourceView(
       UINT(PathTracingRootParameter::kMaterials), material_upload_address);
   deferred_command_list_.D3DSetComputeRootDescriptorTable(
       UINT(PathTracingRootParameter::kMaterialTextures), material_table);
-  D3D12_GPU_VIRTUAL_ADDRESS vertices = pt_vertex_buffer_->GetGPUVirtualAddress();
+  ID3D12Resource* vertex_buffer = pt_vertex_buffers_[current].Get();
+  ID3D12Resource* previous_vertex_buffer = pt_vertex_buffers_[previous].Get();
+  D3D12_GPU_VIRTUAL_ADDRESS vertices = vertex_buffer->GetGPUVirtualAddress();
   D3D12_GPU_VIRTUAL_ADDRESS attributes = pt_attribute_buffer_->GetGPUVirtualAddress();
   D3D12_GPU_VIRTUAL_ADDRESS tlas = pt_tlas_->GetGPUVirtualAddress();
   constexpr auto kNPSR = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
   constexpr auto kUAVState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
-  // Captured triangles to view space, and their material attributes.
+  // Captured triangles to view space, and their material attributes. The
+  // vertex buffers rest in the UAV state.
   PushTransitionBarrier(pt_capture_buffer_.Get(), D3D12_RESOURCE_STATE_STREAM_OUT, kNPSR);
   PushTransitionBarrier(pt_capture_counter_.Get(), D3D12_RESOURCE_STATE_STREAM_OUT, kNPSR);
-  PushUAVBarrier(pt_vertex_buffer_.Get());
+  PushUAVBarrier(vertex_buffer);
   PushUAVBarrier(pt_attribute_buffer_.Get());
   PushUAVBarrier(pt_stats_buffer_.Get());
   deferred_command_list_.D3DSetComputeRootShaderResourceView(
@@ -977,7 +1086,8 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   deferred_command_list_.D3DDispatch((build_triangles + 63) / 64, 1, 1);
   PushTransitionBarrier(pt_capture_buffer_.Get(), kNPSR, D3D12_RESOURCE_STATE_STREAM_OUT);
   PushTransitionBarrier(pt_capture_counter_.Get(), kNPSR, D3D12_RESOURCE_STATE_STREAM_OUT);
-  PushTransitionBarrier(pt_vertex_buffer_.Get(), kUAVState, kNPSR);
+  PushTransitionBarrier(vertex_buffer, kUAVState, kNPSR);
+  PushTransitionBarrier(previous_vertex_buffer, kUAVState, kNPSR);
   PushTransitionBarrier(pt_attribute_buffer_.Get(), kUAVState, kNPSR);
   PushUAVBarrier(pt_stats_buffer_.Get());
   // The previous frame's traversal and builds must be done.
@@ -1004,37 +1114,34 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   deferred_command_list_.D3DBuildRaytracingAccelerationStructure(build);
   PushUAVBarrier(pt_tlas_.Get());
 
-  auto set_constants = [&]() {
-    deferred_command_list_.D3DSetComputeRoot32BitConstants(
-        UINT(PathTracingRootParameter::kConstants), sizeof(constants) / sizeof(uint32_t),
-        &constants, 0);
-  };
-  auto set_table = [&](PathTracingRootParameter parameter, Descriptor descriptor) {
-    deferred_command_list_.D3DSetComputeRootDescriptorTable(UINT(parameter),
-                                                            descriptors[descriptor].second);
-  };
   uint32_t rect_groups_x = (rect_max[0] - rect_min[0] + 7) / 8;
   uint32_t rect_groups_y = (rect_max[1] - rect_min[1] + 7) / 8;
 
-  // Primary surfaces, their colors and background statistics.
-  PushTransitionBarrier(pt_gbuffer_.Get(), kNPSR, kUAVState);
+  // Primary surfaces, their colors, motion and background statistics.
+  PushTransitionBarrier(gbuffer, kNPSR, kUAVState);
   PushTransitionBarrier(pt_albedo_.Get(), kNPSR, kUAVState);
+  PushTransitionBarrier(pt_motion_.Get(), kNPSR, kUAVState);
   deferred_command_list_.D3DSetComputeRootShaderResourceView(
       UINT(PathTracingRootParameter::kBuffer0), tlas);
   deferred_command_list_.D3DSetComputeRootShaderResourceView(
       UINT(PathTracingRootParameter::kBuffer1), vertices);
   deferred_command_list_.D3DSetComputeRootShaderResourceView(
       UINT(PathTracingRootParameter::kAttributes), attributes);
+  deferred_command_list_.D3DSetComputeRootShaderResourceView(
+      UINT(PathTracingRootParameter::kPreviousVertices),
+      previous_vertex_buffer->GetGPUVirtualAddress());
   set_table(PathTracingRootParameter::kTexture0, kColorSRV);
   set_table(PathTracingRootParameter::kRWTexture0, kGBufferUAV);
   set_table(PathTracingRootParameter::kRWTexture1, kAlbedoUAV);
+  set_table(PathTracingRootParameter::kRWTexture2, kMotionUAV);
   SetExternalPipeline(pt_primary_pipeline_.Get());
   SubmitBarriers();
   deferred_command_list_.D3DDispatch(rect_groups_x, rect_groups_y, 1);
 
-  // Lighting.
-  PushTransitionBarrier(pt_gbuffer_.Get(), kUAVState, kNPSR);
+  // Lighting (this frame's samples).
+  PushTransitionBarrier(gbuffer, kUAVState, kNPSR);
   PushTransitionBarrier(pt_albedo_.Get(), kUAVState, kNPSR);
+  PushTransitionBarrier(pt_motion_.Get(), kUAVState, kNPSR);
   PushTransitionBarrier(pt_lighting_.Get(), kNPSR, kUAVState);
   PushTransitionBarrier(pt_specular_.Get(), kNPSR, kUAVState);
   PushUAVBarrier(pt_stats_buffer_.Get());
@@ -1045,14 +1152,34 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   SubmitBarriers();
   deferred_command_list_.D3DDispatch(rect_groups_x, rect_groups_y, 1);
 
-  // Denoising: densely over the 4x4 sampling pattern, then wider.
+  // Temporal accumulation into the current history.
   PushTransitionBarrier(pt_lighting_.Get(), kUAVState, kNPSR);
   PushTransitionBarrier(pt_specular_.Get(), kUAVState, kNPSR);
+  PushTransitionBarrier(irradiance_history, kNPSR, kUAVState);
+  PushTransitionBarrier(specular_history, kNPSR, kUAVState);
+  set_table(PathTracingRootParameter::kTexture0, kMotionSRV);
+  set_table(PathTracingRootParameter::kTexture1, kGBufferSRV);
+  set_table(PathTracingRootParameter::kTexture2, kLightingSRV);
+  set_table(PathTracingRootParameter::kTexture3, kPreviousGBufferSRV);
+  set_table(PathTracingRootParameter::kTexture4, kPreviousIrradianceHistorySRV);
+  set_table(PathTracingRootParameter::kTexture5, kSpecularSRV);
+  set_table(PathTracingRootParameter::kTexture6, kPreviousSpecularHistorySRV);
+  set_table(PathTracingRootParameter::kRWTexture0, kIrradianceHistoryUAV);
+  set_table(PathTracingRootParameter::kRWTexture1, kSpecularHistoryUAV);
+  SetExternalPipeline(pt_temporal_pipeline_.Get());
+  SubmitBarriers();
+  deferred_command_list_.D3DDispatch(rect_groups_x, rect_groups_y, 1);
+
+  // Spatial denoising of the accumulated lighting: irradiance (history ->
+  // temporary -> lighting), then specular (history -> specular).
+  PushTransitionBarrier(irradiance_history, kUAVState, kNPSR);
+  PushTransitionBarrier(specular_history, kUAVState, kNPSR);
   PushTransitionBarrier(pt_lighting_temp_.Get(), kNPSR, kUAVState);
-  constants.filter_radius = 3;
+  set_table(PathTracingRootParameter::kTexture1, kGBufferSRV);
+  constants.filter_radius = 2;
   constants.filter_step = 1;
   set_constants();
-  set_table(PathTracingRootParameter::kTexture2, kLightingSRV);
+  set_table(PathTracingRootParameter::kTexture2, kIrradianceHistorySRV);
   set_table(PathTracingRootParameter::kRWTexture0, kLightingTempUAV);
   SetExternalPipeline(pt_denoise_pipeline_.Get());
   SubmitBarriers();
@@ -1060,31 +1187,29 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   PushTransitionBarrier(pt_lighting_temp_.Get(), kUAVState, kNPSR);
   PushTransitionBarrier(pt_lighting_.Get(), kNPSR, kUAVState);
   constants.filter_radius = 2;
-  constants.filter_step = 3;
+  constants.filter_step = 2;
   set_constants();
   set_table(PathTracingRootParameter::kTexture2, kLightingTempSRV);
   set_table(PathTracingRootParameter::kRWTexture0, kLightingUAV);
   SubmitBarriers();
   deferred_command_list_.D3DDispatch(rect_groups_x, rect_groups_y, 1);
-  // Specular, less so to keep reflections sharp, into the intermediate.
-  PushTransitionBarrier(pt_lighting_temp_.Get(), kNPSR, kUAVState);
-  constants.filter_radius = 3;
+  PushTransitionBarrier(pt_specular_.Get(), kNPSR, kUAVState);
+  constants.filter_radius = 2;
   constants.filter_step = 1;
   set_constants();
-  set_table(PathTracingRootParameter::kTexture2, kSpecularSRV);
-  set_table(PathTracingRootParameter::kRWTexture0, kLightingTempUAV);
+  set_table(PathTracingRootParameter::kTexture2, kSpecularHistorySRV);
+  set_table(PathTracingRootParameter::kRWTexture0, kSpecularUAV);
   SubmitBarriers();
   deferred_command_list_.D3DDispatch(rect_groups_x, rect_groups_y, 1);
-  PushTransitionBarrier(pt_lighting_temp_.Get(), kUAVState, kNPSR);
 
   // Exposed HDR color.
   PushTransitionBarrier(pt_lighting_.Get(), kUAVState, kNPSR);
+  PushTransitionBarrier(pt_specular_.Get(), kUAVState, kNPSR);
   PushTransitionBarrier(pt_hdr_.Get(), kNPSR, kUAVState);
   PushUAVBarrier(pt_stats_buffer_.Get());
-  set_table(PathTracingRootParameter::kTexture1, kGBufferSRV);
   set_table(PathTracingRootParameter::kTexture2, kLightingSRV);
   set_table(PathTracingRootParameter::kTexture4, kAlbedoSRV);
-  set_table(PathTracingRootParameter::kTexture5, kLightingTempSRV);
+  set_table(PathTracingRootParameter::kTexture5, kSpecularSRV);
   set_table(PathTracingRootParameter::kRWTexture0, kHdrUAV);
   SetExternalPipeline(pt_resolve_pipeline_.Get());
   SubmitBarriers();
@@ -1131,19 +1256,31 @@ ID3D12Resource* D3D12CommandProcessor::PathTracingRender(
   SubmitBarriers();
   deferred_command_list_.D3DDispatch((width + 7) / 8, (height + 7) / 8, 1);
   PushTransitionBarrier(pt_output_.Get(), kUAVState, kNPSR);
-  PushTransitionBarrier(pt_vertex_buffer_.Get(), kNPSR, kUAVState);
+  PushTransitionBarrier(vertex_buffer, kNPSR, kUAVState);
+  PushTransitionBarrier(previous_vertex_buffer, kNPSR, kUAVState);
   PushTransitionBarrier(pt_attribute_buffer_.Get(), kNPSR, kUAVState);
 
   if (REXCVAR_GET(path_tracing_debug_log) && pt_frame_ % 120 == 0) {
+    uint32_t matched = 0;
+    for (const PathTracingDraw& draw : pt_draws_) {
+      matched += draw.previous_first != UINT32_MAX ? 1 : 0;
+    }
     REXGPU_INFO(
-        "Path tracing: {} triangles, building {}, scene {},{} {}x{}, projection {:.4f} "
-        "{:.4f}, scene texture {}, materials {} ({} draws, {} textures, up to {} triangles)",
-        pt_draw_triangles_, build_triangles, rect_min[0], rect_min[1],
-        rect_max[0] - rect_min[0], rect_max[1] - rect_min[1], pt_projection_[0],
-        pt_projection_[1],
+        "Path tracing: {} triangles, scene {},{} {}x{}, projection {:.4f} {:.4f}, scene texture "
+        "{}, materials {} ({} draws, {} matched with the previous frame, {} textures)",
+        pt_draw_triangles_, rect_min[0], rect_min[1], rect_max[0] - rect_min[0],
+        rect_max[1] - rect_min[1], pt_projection_[0], pt_projection_[1],
         scene_texture != swap_texture ? fmt::format("{:08X}", pt_scene_address_) : "not found",
-        materials, pt_draws_.size(), material_textures.size(), pt_draw_triangles_);
+        materials, pt_draws_.size(), matched, material_textures.size());
   }
+
+  // This frame becomes the history.
+  pt_history_index_ = current;
+  pt_rendered_this_frame_ = true;
+  pt_previous_draws_ = pt_draws_;
+  pt_previous_draw_keys_ = pt_draw_keys_;
+  pt_previous_projection_[0] = pt_projection_[0];
+  pt_previous_projection_[1] = pt_projection_[1];
 
   srv_desc_out = {};
   srv_desc_out.Format = kOutputFormat;
@@ -1175,6 +1312,9 @@ void D3D12CommandProcessor::PathTracingFrameEnd() {
 
   pt_captured_this_frame_ = false;
   pt_capture_done_this_frame_ = false;
+  // The history is only usable if the previous frame was path traced.
+  pt_rendered_previous_frame_ = pt_rendered_this_frame_;
+  pt_rendered_this_frame_ = false;
 
   if (REXCVAR_GET(path_tracing_debug_log)) {
     auto now = std::chrono::steady_clock::now();
