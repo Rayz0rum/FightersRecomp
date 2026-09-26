@@ -271,7 +271,9 @@ float3 PTSpecularAlbedo(float3 specular_color, float alpha, float n_dot_v) {
 }
 
 // GGX highlight of a directional light (without the light's color): the BRDF
-// times n.l.
+// times n.l, softly limited - the game's light has no sun in its sky to
+// match, and full strength glints on the glossy floors at grazing angles read
+// as blown-out blobs. Tighter (glossier) highlights may stay brighter.
 float PTSpecularHighlight(float3 normal, float3 view, float3 light, float roughness) {
   float n_dot_l = dot(normal, light);
   float n_dot_v = max(dot(normal, view), 1.0e-3);
@@ -285,7 +287,10 @@ float PTSpecularHighlight(float3 normal, float3 view, float3 light, float roughn
   float d = n_dot_h * n_dot_h * (alpha2 - 1.0) + 1.0;
   float distribution = alpha2 / (kPTPi * d * d);
   float geometry = PTSmithG1(n_dot_l, alpha2) * PTSmithG1(n_dot_v, alpha2);
-  return distribution * geometry * PTFresnel(dot(view, half_vector)) / (4.0 * n_dot_v);
+  float highlight =
+      distribution * geometry * PTFresnel(dot(view, half_vector)) / (4.0 * n_dot_v);
+  float limit = 0.05 / max(alpha, 1.0e-3);
+  return limit * (1.0 - exp(-highlight / limit));
 }
 
 // Octahedral normal encoding (FSR Ray Regeneration).
