@@ -1,15 +1,12 @@
-> [!IMPORTANT]
-> I wasn’t sure that posting this project would cause such a stir. I see that many people are hating even on the minimal use of AI and ReXGlue. I’m Sparkos The Wolf, and I’m unlikely to continue working on it; I’m leaving the project on GitHub for those who can actually take the idea further. I couldn’t do it on XenonRecomp and decided to try ReXGlue, not knowing what kind of reputation it had — I think that’s why it’s been without releases for a whole month, and that was a mistake. 
-
 <div align="center">
 
 <img src="assets/logo.png" width="600" alt="Sonic the Fighters Recompiled">
 
-# Sonic the Fighters Recompiled
+# Sonic the Fighters Recompiled DX
 
-Native Windows recompilation of the Xbox 360 XBLA version of *Sonic the Fighters*.
+Native Windows recompilation of the Xbox 360 XBLA version of *Sonic the Fighters*, continuing the work of **Sonic The Fighters Recompiled**.
 
-**Current version: [v0.1.1](https://github.com/SparkosTheWolf/FightersRecomp/releases/tag/v0.1.1)**
+**Current version: [Click me!](https://github.com/Rayz0rum/FightersRecomp/releases/latest)**
 
 </div>
 
@@ -17,14 +14,14 @@ Native Windows recompilation of the Xbox 360 XBLA version of *Sonic the Fighters
 
 ## About
 
-**Sonic the Fighters Recompiled** is an unofficial native Windows port of the Xbox 360 XBLA release of *Sonic the Fighters*.
+**Sonic the Fighters Recompiled DX** is an unofficial native Windows port of the Xbox 360 XBLA release of *Sonic the Fighters*, continuing the work of **Sonic The Fighters Recompiled**..
 
 The project uses RexGlue / RexGL to run the game natively on PC without Xenia or a full Xbox 360 emulation environment.
 
-The original game is **not included**. You need your own legally acquired Xbox 360 copy of *Sonic the Fighters*.
+The original game is **not included**. You need your own legally acquired Xbox 360 (or PlayStation 3) copy of *Sonic the Fighters*.
 
 > [!IMPORTANT]
-> AI used in some description information and sometimes in code. 
+> AI was entirely used for my continuated work, but I am unsure on the amount of AI originally used. 
 
 ---
 
@@ -32,6 +29,7 @@ The original game is **not included**. You need your own legally acquired Xbox 3
 
 - Native Windows executable
 - Full game playable from start to finish
+- Path Tracing (with NRD, DLSS RR and FSR RR support)
 - Keyboard and XInput controller support
 - Keyboard remapping
 - Save support
@@ -42,7 +40,7 @@ The original game is **not included**. You need your own legally acquired Xbox 3
 - VSync option (tear-free presentation; does not affect game speed)
 - Keyboard can be Player 2 for local matches against a controller
 - Integrated installer
-- English and Russian installer languages
+- Multi-language installer languages
 - Widescreen mode (full screen mode in Original settings) without specific aspect ratio
 
 The game currently uses the original Xbox 360 button prompts.
