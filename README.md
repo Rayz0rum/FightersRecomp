@@ -67,9 +67,9 @@ MacOS can launch this game by installer in CrossOver using D3DMetal in graphics 
 
 ## Installation
 
-You need a legally acquired copy of the Xbox 360 XBLA version of *Sonic the Fighters*.
+You need a legally acquired copy of the Xbox 360 XBLA version of *Sonic the Fighters* (World).
 
-The installer expects the following game file:
+The installer expects the following game file, found on your Xbox 360 hard drive in `Content\0000000000000000\5841129E\000D0000`:
 
 ```text
 17DB4B597093061B64BFC3E0BCB000BFF14EACBB58
@@ -78,16 +78,14 @@ The installer expects the following game file:
 To install:
 
 1. Download and extract the latest release.
-2. Run `install.exe`.
-3. Select English or Russian.
-4. Select the required game file from your own dump.
-5. Wait for verification and installation.
-
-The installer will launch `stfrecompiled.exe` when installation is finished.
-
-After that, `install.exe` can also be used to uninstall or reinstall the game.
+2. Run the game. The installer opens on the first launch, while the game data isn't installed yet.
+3. Select a language (English, Japanese, German, French, Spanish or Italian).
+4. Add the game file (or a folder that contains it) from your own dump.
+5. Wait for verification and installation. The game starts when it's done.
 
 Modified or unsupported game files will fail verification.
+
+The installer is a port of [Unleashed Recompiled](https://github.com/hedge-dev/UnleashedRecomp)'s, using the game's own fonts, button prompts and sounds (built from `_unpacked` when compiling).
 
 ---
 
@@ -214,7 +212,7 @@ It may work if it is exposed to the game as an XInput-compatible controller. The
 
 ### Is the game itself translated into Russian?
 
-Not yet. The installer supports Russian, but the game currently remains in English.
+Not yet. The game currently remains in English (or Japanese).
 
 ---
 
@@ -226,7 +224,8 @@ Creator and Lead Developer of **Sonic the Fighters Recompiled**.
 
 ### Special Thanks
 
-- **[Unleashed Recompiled](https://github.com/hedge-dev/UnleashedRecomp)** — inspiration for this project.
+- **[Unleashed Recompiled](https://github.com/hedge-dev/UnleashedRecomp)** — inspiration for this project, and the installer's code and design (GPL-3.0).
+- **[Sonic Wiki Zone](https://sonic.fandom.com/wiki/Category:Sonic_the_Fighters_stock_artwork)** — the official character renders used by the installer.
 - **[XenonRecomp](https://github.com/hedge-dev/XenonRecomp)** — tools and technical groundwork used during early development.
 - **[RexGL / RexGlue](https://github.com/rexglue/rexglue-sdk)** — recompilation/runtime framework used by the current version.
 
@@ -239,6 +238,12 @@ Creator and Lead Developer of **Sonic the Fighters Recompiled**.
 *Sonic the Hedgehog*, *Sonic the Fighters* and all related characters, names, logos, assets and intellectual property belong to their respective owners.
 
 This project does not distribute the original game or its copyrighted game data.
+
+---
+
+## License
+
+The project's source code is licensed under the [GNU General Public License v3.0](COPYING), as it includes code ported from Unleashed Recompiled. The ReXGlue SDK in `thirdparty/rexglue-sdk` keeps its own license.
 
 ---
 
