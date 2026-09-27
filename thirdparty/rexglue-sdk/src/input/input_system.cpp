@@ -78,6 +78,11 @@ void InputSystem::SetDeviceAssignment(std::unique_ptr<DeviceAssignment> assignme
   }
 }
 
+void InputSystem::SetExtraButtonsCallback(
+    std::function<uint16_t(uint32_t user_index)> callback) {
+  extra_buttons_ = std::move(callback);
+}
+
 void InputSystem::RefreshDevices() {
   std::vector<DeviceInfo> seen;
   std::vector<InputDriver*> owners;
@@ -244,6 +249,15 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
 
   if (!any) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
+  }
+  if (extra_buttons_) {
+    const uint16_t extra = extra_buttons_(user_index);
+    merged.gamepad.buttons = static_cast<uint16_t>(static_cast<uint16_t>(merged.gamepad.buttons) | extra);
+    if (user_index < 4 && extra != last_extra_buttons_[user_index]) {
+      last_extra_buttons_[user_index] = extra;
+      ++extra_buttons_changes_;
+    }
+    merged.packet_number = static_cast<uint32_t>(merged.packet_number) + extra_buttons_changes_;
   }
   if (out_state) {
     *out_state = merged;

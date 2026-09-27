@@ -10,6 +10,8 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -42,6 +44,11 @@ class InputSystem : public system::IInputSystem {
   /// Replaces any previous assignment. Call before the guest starts polling.
   void SetDeviceAssignment(std::unique_ptr<DeviceAssignment> assignment);
 
+  /// Buttons the host adds to a user's pad state each time the guest reads it
+  /// (for its own controls, such as mouse menu navigation). Called on the
+  /// guest thread; set it before the guest starts polling.
+  void SetExtraButtonsCallback(std::function<uint16_t(uint32_t user_index)> callback);
+
   X_RESULT GetCapabilities(uint32_t user_index, uint32_t flags, X_INPUT_CAPABILITIES* out_caps);
   X_RESULT GetState(uint32_t user_index, X_INPUT_STATE* out_state);
   X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
@@ -60,6 +67,12 @@ class InputSystem : public system::IInputSystem {
 
   std::unique_ptr<DeviceAssignment> assignment_;
   ActiveDeviceTracker active_devices_;
+
+  std::function<uint16_t(uint32_t)> extra_buttons_;
+  // Counts changes of the extra buttons, added to the packet number so the
+  // guest sees them as new input.
+  uint32_t extra_buttons_changes_ = 0;
+  uint16_t last_extra_buttons_[4] = {};
 
   // Ordered by ordinal. Ordinals are never recycled, so unplugging pad one
   // does not renumber pad two.

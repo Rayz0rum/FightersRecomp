@@ -10,10 +10,12 @@
 #include <rex/input/input_system.h>
 #include <rex/system/xmemory.h>
 #include <Windows.h>
+#include <windowsx.h>
 #include <timeapi.h>
 #include <algorithm>
 #include <atomic>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -23,6 +25,7 @@
 #include <thread>
 #include <vector>
 #include "stf_xbla_app.h"
+#include "installer/installer_wizard.h"
 
 // Drivers only honor these in the main executable (the copies in the GPU plugin
 // DLL are ignored), so without them hybrid laptops run on the integrated GPU.
@@ -531,6 +534,20 @@ void AdjustPcMenuValue(int row, int direction)
     ApplyPcSettings();
 }
 
+// Goes to a row's next value, round to the first (for the mouse).
+void CyclePcMenuValue(int row)
+{
+    if (row < 0 || row >= kPcSettingRows) return;
+    InitializePcMenuValues();
+    int value = 0;
+    {
+        std::lock_guard lock(g_pc_setting_values_mutex);
+        value = g_pc_setting_values[static_cast<size_t>(row)];
+    }
+    const int maximum = kPcMenuMaxima[static_cast<size_t>(row)];
+    AdjustPcMenuValue(row, value >= maximum ? -maximum : 1);
+}
+
 void CloseRecompSettings()
 {
     uint8_t* base = g_guest_base.load();
@@ -591,12 +608,226 @@ bool IsHelpOptionsWindowActive(HWND window)
         GetTickCount64() - last_draw < 300;
 }
 
+// Mouse and arrow keys in the game's menus (only there, not in fights).
+//
+// The game draws the selection bar of every list menu with sub_82126B00, at
+// the selected row. StfrMenuSelectionHook tracks the menus on screen with it:
+// the last one drawn in a frame is on top. Rows are 54 apart (at the game's
+// 1920x1080), from 382 to 1538 across, the last one 46 above the panel's
+// anchor 92. Where a menu's rows can't be worked out, it still takes clicks,
+// the wheel and the arrow keys.
+// Everything reaches the game as player 1's pad (see StfrMenuButtons).
+struct MenuPanel {
+    uint32_t panel = 0;
+    uint32_t type = 0;  // The panel's size (9 + rows for lists).
+    uint64_t sequence = 0;
+    ULONGLONG tick = 0;
+    float selected_y = 0.0f;
+    float last_row_y = 0.0f;
+    int rows = 0;  // 0 when the menu object wasn't found.
+    int selected = -1;
+};
+constexpr float kMenuRowPitch = 54.0f;
+constexpr float kMenuRowsLeft = 382.0f;
+constexpr float kMenuRowsRight = 1538.0f;
+constexpr ULONGLONG kMenuActiveMs = 150;
+constexpr uint16_t kPadUp = 0x0001, kPadDown = 0x0002, kPadLeft = 0x0004, kPadRight = 0x0008;
+constexpr uint16_t kPadA = 0x1000, kPadB = 0x2000;
+
+std::mutex g_menu_mutex;
+std::array<MenuPanel, 4> g_menu_panels{};
+uint64_t g_menu_sequence = 0;
+// Guarded by g_menu_mutex: presses queued for player 1, the one being made,
+// and the row the mouse is over.
+std::vector<uint16_t> g_menu_presses;
+uint16_t g_menu_press = 0;
+bool g_menu_press_down = false;
+std::chrono::steady_clock::time_point g_menu_press_until{};
+uint32_t g_menu_hover_panel = 0;
+int g_menu_hover_row = -1;
+uint16_t g_menu_hover_direction = 0;
+// The selected row when the last step towards the mouse was made.
+int g_menu_step_from = -1;
+// Arrow keys held (kPad* bits).
+std::atomic<uint16_t> g_menu_arrows{0};
+
+bool PortMenuPageOpen()
+{
+    return g_recomp_settings_open.load() || g_remap_open.load() || g_achievements_open.load() ||
+           g_pause_achievements_open.load();
+}
+
+// The menu on top, if one is on screen. Call with g_menu_mutex held.
+const MenuPanel* TopMenuLocked()
+{
+    const ULONGLONG now = GetTickCount64();
+    const MenuPanel* top = nullptr;
+    for (const MenuPanel& entry : g_menu_panels) {
+        if (entry.panel && now - entry.tick < kMenuActiveMs &&
+            (!top || entry.sequence > top->sequence)) {
+            top = &entry;
+        }
+    }
+    return top;
+}
+
+bool MenuOnScreen()
+{
+    std::lock_guard lock(g_menu_mutex);
+    return TopMenuLocked() != nullptr;
+}
+
+void QueueMenuPress(uint16_t button)
+{
+    std::lock_guard lock(g_menu_mutex);
+    if (g_menu_presses.size() < 8) g_menu_presses.push_back(button);
+}
+
+// Player 1's extra buttons (InputSystem::SetExtraButtonsCallback): the arrow
+// keys as the D-pad and the queued presses, while a menu is on screen.
+uint16_t StfrMenuButtons(uint32_t user_index)
+{
+    if (user_index != 0) return 0;
+    std::lock_guard lock(g_menu_mutex);
+    const MenuPanel* top = TopMenuLocked();
+    if (!top || PortMenuPageOpen()) {
+        g_menu_presses.clear();
+        g_menu_press = 0;
+        g_menu_press_down = false;
+        g_menu_hover_row = -1;
+        return 0;
+    }
+    uint16_t buttons = g_menu_arrows.load();
+
+    // Each press is held for a few frames, then released for a few.
+    using namespace std::chrono_literals;
+    const auto now = std::chrono::steady_clock::now();
+    if (now < g_menu_press_until) {
+        return buttons | (g_menu_press_down ? g_menu_press : 0);
+    }
+    if (g_menu_press_down) {
+        g_menu_press_down = false;
+        g_menu_press_until = now + 40ms;
+        return buttons;
+    }
+    uint16_t next = 0;
+    if (!g_menu_presses.empty()) {
+        next = g_menu_presses.front();
+        g_menu_presses.erase(g_menu_presses.begin());
+    } else if (g_menu_hover_row >= 0 && top->panel == g_menu_hover_panel && top->rows &&
+               top->selected >= 0 && g_menu_hover_row != top->selected) {
+        // Go towards the row under the mouse. Stop if it went past it (rows the
+        // game skips) or the last step didn't move.
+        const uint16_t direction = g_menu_hover_row > top->selected ? kPadDown : kPadUp;
+        if ((g_menu_hover_direction && g_menu_hover_direction != direction) ||
+            g_menu_step_from == top->selected) {
+            g_menu_hover_row = -1;
+        } else {
+            g_menu_hover_direction = direction;
+            g_menu_step_from = top->selected;
+            next = direction;
+        }
+    }
+    if (!next) return buttons;
+    g_menu_press = next;
+    g_menu_press_down = true;
+    g_menu_press_until = now + 40ms;
+    return buttons | next;
+}
+
+// A point in the window in the game's 1920x1080 coordinates.
+bool ClientToGame(HWND window, LPARAM lparam, float& x, float& y)
+{
+    RECT client{};
+    if (!GetClientRect(window, &client)) return false;
+    const float width = float(client.right - client.left);
+    const float height = float(client.bottom - client.top);
+    if (width <= 0 || height <= 0) return false;
+    const float mx = float(GET_X_LPARAM(lparam)), my = float(GET_Y_LPARAM(lparam));
+    if (rex::cvar::GetFlagByName("present_letterbox") == "false") {
+        x = mx * 1920.0f / width;
+        y = my * 1080.0f / height;
+        return true;
+    }
+    const float scale = std::min(width / 1920.0f, height / 1080.0f);
+    x = (mx - (width - 1920.0f * scale) / 2) / scale;
+    y = (my - (height - 1080.0f * scale) / 2) / scale;
+    return true;
+}
+
+// The row of the menu on top under the mouse: -1 if none, -2 if the menu's
+// rows aren't known.
+int MenuRowAt(HWND window, LPARAM lparam, uint32_t* panel = nullptr, int* selected = nullptr)
+{
+    float x = 0, y = 0;
+    if (!ClientToGame(window, lparam, x, y)) return -1;
+    std::lock_guard lock(g_menu_mutex);
+    const MenuPanel* top = TopMenuLocked();
+    if (!top) return -1;
+    if (panel) *panel = top->panel;
+    if (selected) *selected = top->selected;
+    if (!top->rows) return -2;
+    if (x < kMenuRowsLeft || x > kMenuRowsRight) return -1;
+    const float first_y = top->last_row_y - (top->rows - 1) * kMenuRowPitch;
+    // The bar starts a little above the row's position.
+    const int row = int(std::floor((y - first_y + 3.0f) / kMenuRowPitch));
+    return row >= 0 && row < top->rows ? row : -1;
+}
+
+void HoverMenuRow(HWND window, LPARAM lparam)
+{
+    uint32_t panel = 0;
+    const int row = MenuRowAt(window, lparam, &panel);
+    if (row < 0) return;
+    std::lock_guard lock(g_menu_mutex);
+    if (row != g_menu_hover_row || panel != g_menu_hover_panel) {
+        g_menu_hover_row = row;
+        g_menu_hover_panel = panel;
+        g_menu_hover_direction = 0;
+        g_menu_step_from = -1;
+    }
+}
+
+// Whether the mouse is on the selected row of the menu on top (or anywhere on
+// a menu whose rows aren't known).
+bool MouseOnSelectedMenuRow(HWND window, LPARAM lparam)
+{
+    int selected = -1;
+    const int row = MenuRowAt(window, lparam, nullptr, &selected);
+    return row == -2 || (row >= 0 && row == selected);
+}
+
+void UpdateMenuArrows(UINT message, WPARAM wparam)
+{
+    uint16_t bit = 0;
+    switch (wparam) {
+    case VK_UP: bit = kPadUp; break;
+    case VK_DOWN: bit = kPadDown; break;
+    case VK_LEFT: bit = kPadLeft; break;
+    case VK_RIGHT: bit = kPadRight; break;
+    default: return;
+    }
+    if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) g_menu_arrows |= bit;
+    else if (message == WM_KEYUP || message == WM_SYSKEYUP) g_menu_arrows &= uint16_t(~bit);
+}
+
 LRESULT CALLBACK GameWindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
     static WNDPROC original = reinterpret_cast<WNDPROC>(GetPropW(window, L"STFR_OriginalWndProc"));
 	uint8_t* base = g_guest_base.load();
 	static std::array<bool, 256> blocked_key_releases{};
 	static bool blocked_mouse_release = false;
+	// Alt+F4 quits the game right away, whatever it's doing. The installer has
+	// its own closing (it asks before cancelling an installation).
+	if (message == WM_SYSKEYDOWN && wparam == VK_F4 && (lparam & (1LL << 29))) {
+		if (InstallerWizard::s_isVisible) {
+			return CallWindowProcW(original, window, message, wparam, lparam);
+		}
+		REXLOG_INFO("Alt+F4: exiting");
+		TerminateProcess(GetCurrentProcess(), 0);
+	}
+	UpdateMenuArrows(message, wparam);
+	if (message == WM_KILLFOCUS) g_menu_arrows = 0;
 	const bool key_down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
 	const bool key_up = message == WM_KEYUP || message == WM_SYSKEYUP;
 	if ((key_up && g_remap_capture_activation_key.load() == wparam) ||
@@ -672,10 +903,33 @@ LRESULT CALLBACK GameWindowProc(HWND window, UINT message, WPARAM wparam, LPARAM
 		if (key_up) return CallWindowProcW(original, window, message, wparam, lparam);
 	}
 	if (g_achievements_open.load()) {
-		if (message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN) {
+		// The mouse: pointing selects a row, the left button on the page row
+		// turns the page, the right button closes.
+		if (message == WM_MOUSEMOVE || message == WM_MOUSEWHEEL) {
+			const int row = message == WM_MOUSEMOVE ? MenuRowAt(window, lparam)
+				: std::clamp(g_achievement_selected_row.load() -
+				             GET_WHEEL_DELTA_WPARAM(wparam) / WHEEL_DELTA, 0, 4);
+			if (row >= 0 && row <= 4 && row != g_achievement_selected_row.load()) {
+				g_achievement_selected_row = row;
+				RefreshAchievementPage();
+			}
+		}
+		if (message == WM_LBUTTONDOWN) {
+			if (MenuRowAt(window, lparam) == 4) {
+				const int page = g_achievement_page.load();
+				++g_achievement_page;
+				RefreshAchievementPage();
+				if (g_achievement_page.load() == page) {
+					g_achievement_page = 0;
+					RefreshAchievementPage();
+				}
+			}
+			return 0;
+		}
+		if (message == WM_RBUTTONDOWN) {
 			g_achievements_open = false;
 			g_help_options_active = false;
-			g_achievement_back_key = message == WM_LBUTTONDOWN ? VK_LBUTTON : VK_RBUTTON;
+			g_achievement_back_key = VK_RBUTTON;
 			return CallWindowProcW(original, window, WM_KEYDOWN, 'C', 0);
 		}
 		if (message == WM_LBUTTONUP || message == WM_RBUTTONUP) return 0;
@@ -708,7 +962,7 @@ LRESULT CALLBACK GameWindowProc(HWND window, UINT message, WPARAM wparam, LPARAM
 		if (key_up) return 0;
 	}
 	if ((key_down && (wparam == VK_RETURN || wparam == VK_SPACE)) ||
-	    message == WM_LBUTTONDOWN) {
+	    (message == WM_LBUTTONDOWN && MouseOnSelectedMenuRow(window, lparam))) {
 		const uint32_t main_menu = g_main_menu_object.load();
 		if (base && main_menu && GetTickCount64() - g_main_menu_draw_tick.load() < 250 &&
 		    REX_LOAD_U32(main_menu + 76) == 4) {
@@ -730,8 +984,20 @@ LRESULT CALLBACK GameWindowProc(HWND window, UINT message, WPARAM wparam, LPARAM
 			g_help_options_active = false;
 			g_help_options_draw_tick = 0;
 		} else {
+		// The mouse: pointing selects a row, the left button goes to its next
+		// value (round to the first), the right button closes.
+		if (message == WM_MOUSEMOVE || message == WM_MOUSEWHEEL) {
+			const int row = message == WM_MOUSEMOVE ? MenuRowAt(window, lparam)
+				: std::clamp(g_pc_selected_row.load() -
+				             GET_WHEEL_DELTA_WPARAM(wparam) / WHEEL_DELTA, 0, kPcSettingRows - 1);
+			if (row >= 0 && row < kPcSettingRows) g_pc_selected_row = row;
+		}
 		if (message == WM_LBUTTONDOWN) {
-			CloseRecompSettings();
+			const int row = MenuRowAt(window, lparam);
+			if (row >= 0 && row < kPcSettingRows) {
+				g_pc_selected_row = row;
+				CyclePcMenuValue(row);
+			}
 			return 0;
 		}
 		if (message == WM_LBUTTONUP) return 0;
@@ -784,10 +1050,38 @@ LRESULT CALLBACK GameWindowProc(HWND window, UINT message, WPARAM wparam, LPARAM
 				} else if (message == WM_RBUTTONDOWN) {
 					CloseRemapInputs();
 				} else if (message == WM_LBUTTONDOWN) {
-					if (g_remap_selected_row.load() == 4) ChangeRemapPage(1);
-					else StartRemapCapture(VK_LBUTTON);
+					// The page row turns the page (round to the first), a binding
+					// row waits for its key.
+					const int row = MenuRowAt(window, lparam);
+					if (row == 4) {
+						g_remap_selected_row = 4;
+						if (g_remap_page.load() >= kRemapPageCount - 1) ChangeRemapPage(-kRemapPageCount);
+						else ChangeRemapPage(1);
+					} else if (row >= 0 && row < RemapBindingsOnPage(g_remap_page.load())) {
+						g_remap_selected_row = row;
+						StartRemapCapture(VK_LBUTTON);
+					}
 				}
 				return 0;
+			}
+			if ((message == WM_MOUSEMOVE || message == WM_MOUSEWHEEL) &&
+			    g_remap_capture_binding.load() < 0) {
+				const int visible = RemapBindingsOnPage(g_remap_page.load());
+				int row = -1;
+				if (message == WM_MOUSEMOVE) {
+					row = MenuRowAt(window, lparam);
+				} else {
+					// The wheel goes through the bindings and the page row.
+					const int current = g_remap_selected_row.load();
+					row = GET_WHEEL_DELTA_WPARAM(wparam) < 0
+						? (current >= visible - 1 ? 4 : current + 1)
+						: (current == 4 ? visible - 1 : std::max(0, current - 1));
+				}
+				if ((row == 4 || (row >= 0 && row < visible)) && row != g_remap_selected_row.load()) {
+					g_remap_selected_row = row;
+					g_remap_status.clear();
+					RefreshRemapPage();
+				}
 			}
 			if (message == WM_LBUTTONUP || message == WM_RBUTTONUP ||
 			    message == WM_MBUTTONUP) return 0;
@@ -888,15 +1182,26 @@ LRESULT CALLBACK GameWindowProc(HWND window, UINT message, WPARAM wparam, LPARAM
 		g_help_options_active = false;
 		return false;
 	};
-	// Mouse buttons also work as the two main buttons of gamepad
-	if (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP) {
-		if (message == WM_LBUTTONDOWN && route_help_options()) return 0;
-		const UINT key_message = message == WM_LBUTTONDOWN ? WM_KEYDOWN : WM_KEYUP;
-		CallWindowProcW(original, window, key_message, VK_SPACE, 0);
-	}
-	if (message == WM_RBUTTONDOWN || message == WM_RBUTTONUP) {
-		const UINT key_message = message == WM_RBUTTONDOWN ? WM_KEYDOWN : WM_KEYUP;
-		CallWindowProcW(original, window, key_message, 'C', 0);
+	// The mouse in the menus (and nowhere else): pointing at a row selects it,
+	// the left button chooses the selected row, the right one goes back and the
+	// wheel moves up and down.
+	if (!PortMenuPageOpen()) {
+		if (message == WM_MOUSEMOVE) HoverMenuRow(window, lparam);
+		if (message == WM_LBUTTONDOWN && MenuOnScreen()) {
+			if (MouseOnSelectedMenuRow(window, lparam)) {
+				if (route_help_options()) return 0;
+				QueueMenuPress(kPadA);
+			} else {
+				HoverMenuRow(window, lparam);
+			}
+		}
+		if (message == WM_RBUTTONDOWN && MenuOnScreen()) QueueMenuPress(kPadB);
+		if (message == WM_MOUSEWHEEL && MenuOnScreen()) {
+			const int notches = GET_WHEEL_DELTA_WPARAM(wparam) / WHEEL_DELTA;
+			for (int i = 0; i < std::abs(notches); ++i) {
+				QueueMenuPress(notches > 0 ? kPadUp : kPadDown);
+			}
+		}
 	}
     if ((message == WM_KEYDOWN || message == WM_SYSKEYDOWN) && wparam == VK_F6) {
         if ((lparam & (1LL << 30)) == 0) {
@@ -1050,6 +1355,7 @@ void StfXblaApp::OnPreSetup(rex::RuntimeConfig& config)
     config.input_factory = [](bool tool_mode) -> std::unique_ptr<rex::system::IInputSystem> {
         auto input = rex::input::CreateDefaultInputSystem(tool_mode);
         input->SetDeviceAssignment(std::make_unique<StfrDeviceAssignment>());
+        input->SetExtraButtonsCallback(StfrMenuButtons);
         return input;
     };
 
@@ -1328,6 +1634,80 @@ void StfrCaptureMainMenuHook(PPCRegister& r29)
 {
     g_main_menu_object = r29.u32;
     g_main_menu_draw_tick = GetTickCount64();
+}
+
+void StfrMenuSelectionHook(PPCRegister& r1, PPCRegister& r3, PPCRegister& r13, PPCRegister& f2)
+{
+    // Tracks the menus on screen for the mouse and the arrow keys (see
+    // MenuPanel). Like the function, only once the menu's panel is open.
+    uint8_t* base = g_guest_base.load();
+    const uint32_t panel = r3.u32;
+    if (!base || !panel || REX_LOAD_U32(panel) != 3 || !REX_LOAD_U32(panel + 20)) return;
+    const float selected_y = static_cast<float>(f2.f64);
+
+    std::lock_guard lock(g_menu_mutex);
+    MenuPanel* entry = nullptr;
+    for (MenuPanel& candidate : g_menu_panels) {
+        if (candidate.panel == panel) entry = &candidate;
+    }
+    // Panels are reused (a page reopening at another size): measure again
+    // when it changed or wasn't on screen.
+    const uint32_t type = REX_LOAD_U32(panel + 4);
+    const bool is_new = !entry || entry->type != type ||
+                        GetTickCount64() - entry->tick >= kMenuActiveMs;
+    if (!entry) {
+        entry = &*std::min_element(g_menu_panels.begin(), g_menu_panels.end(),
+                                   [](const auto& a, const auto& b) { return a.tick < b.tick; });
+    }
+    if (is_new) {
+        *entry = {};
+        entry->panel = panel;
+        entry->type = type;
+    }
+    if (is_new || entry->selected_y != selected_y) {
+        entry->selected_y = selected_y;
+        if (is_new) {
+            // The rows end at the panel's anchor 92 (sub_821269D0 gives an
+            // anchor's position).
+            static uint32_t anchor = 0;
+            if (!anchor) anchor = AllocateGameBuffer(16);
+            if (anchor) {
+                for (uint32_t i = 0; i < 16; i += 4) REX_STORE_U32(anchor + i, 0);
+                PPCContext ctx{};
+                ctx.r1.u64 = r1.u32 - 1024;
+                ctx.r13 = r13;
+                ctx.fpscr.csr = ctx.fpscr.getcsr();
+                ctx.r3.u64 = panel;
+                ctx.r4.u64 = anchor;
+                ctx.r5.u64 = 92;
+                ctx.r6.u64 = 0;
+                sub_821269D0(ctx, base);
+                if (ctx.r3.u32 & 0xFF) {
+                    entry->last_row_y = std::bit_cast<float>(REX_LOAD_U32(anchor + 4)) - 46.0f;
+                }
+            }
+        }
+        // The rows shown: lists open their panel at 9 + rows (hidden rows
+        // don't count). The other panels are messages, with an OK or Yes and
+        // No under their text: taken as two rows (going up from a lone OK
+        // doesn't move, which stops the mouse's steps).
+        if (is_new && entry->last_row_y > 0.0f) {
+            entry->rows = type >= 10 && type <= 24 ? static_cast<int>(type) - 9 : 2;
+        }
+        // The selected row, from where the bar is (the game skips hidden rows
+        // itself when going up and down).
+        entry->selected = -1;
+        if (entry->rows) {
+            const float first_y = entry->last_row_y - float(entry->rows - 1) * kMenuRowPitch;
+            const int row = static_cast<int>(std::lround((selected_y - first_y) / kMenuRowPitch));
+            if (row >= 0 && row < entry->rows &&
+                std::abs(first_y + row * kMenuRowPitch - selected_y) < 2.0f) {
+                entry->selected = row;
+            }
+        }
+    }
+    entry->tick = GetTickCount64();
+    entry->sequence = ++g_menu_sequence;
 }
 
 bool StfrResolveStringHook(PPCRegister& r3)

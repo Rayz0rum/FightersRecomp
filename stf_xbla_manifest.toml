@@ -123,3 +123,10 @@ name = "StfrOpenPauseAchievementsHook"
 address = 0x8218C674
 registers = ["r3"]
 jump_address = 0x8218C67C
+
+# Selection bar of the list menus (every menu's selected row): where the
+# menus and their rows are, for the mouse and the arrow keys.
+[[entrypoint.midasm_hook]]
+name = "StfrMenuSelectionHook"
+address = 0x82126B00
+registers = ["r1", "r3", "r13", "f2"]
