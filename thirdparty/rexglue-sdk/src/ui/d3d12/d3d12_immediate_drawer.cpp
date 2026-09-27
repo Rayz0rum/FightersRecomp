@@ -25,6 +25,8 @@ namespace rex::ui::d3d12 {
 
 // Generated with `xb buildshaders`.
 namespace shaders {
+#include "../shaders/bytecode/d3d12_5_1/immediate_effect_ps.h"
+#include "../shaders/bytecode/d3d12_5_1/immediate_effect_vs.h"
 #include "../shaders/bytecode/d3d12_5_1/immediate_ps.h"
 #include "../shaders/bytecode/d3d12_5_1/immediate_vs.h"
 }  // namespace shaders
@@ -105,6 +107,16 @@ bool D3D12ImmediateDrawer::Initialize() {
     root_parameter.Constants.Num32BitValues = 2;
     root_parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
   }
+  {
+    auto& root_parameter = root_parameters[size_t(RootParameter::kEffect)];
+    root_parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    root_parameter.Constants.ShaderRegister = 1;
+    root_parameter.Constants.RegisterSpace = 0;
+    root_parameter.Constants.Num32BitValues = UINT(sizeof(ImmediateEffect) / sizeof(uint32_t));
+    root_parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+  }
+  static_assert(sizeof(ImmediateEffect) == 24 * sizeof(uint32_t),
+                "ImmediateEffect must match the effect shaders' constants");
   D3D12_ROOT_SIGNATURE_DESC root_signature_desc;
   root_signature_desc.NumParameters = UINT(RootParameter::kCount);
   root_signature_desc.pParameters = root_parameters;
@@ -163,6 +175,22 @@ bool D3D12ImmediateDrawer::Initialize() {
   pipeline_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
   if (FAILED(device->CreateGraphicsPipelineState(&pipeline_desc, IID_PPV_ARGS(&pipeline_line_)))) {
     REXLOG_ERROR("D3D12ImmediateDrawer: Failed to create the line pipeline");
+    return false;
+  }
+  pipeline_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+  pipeline_desc.VS.pShaderBytecode = shaders::immediate_effect_vs;
+  pipeline_desc.VS.BytecodeLength = sizeof(shaders::immediate_effect_vs);
+  pipeline_desc.PS.pShaderBytecode = shaders::immediate_effect_ps;
+  pipeline_desc.PS.BytecodeLength = sizeof(shaders::immediate_effect_ps);
+  if (FAILED(device->CreateGraphicsPipelineState(&pipeline_desc,
+                                                 IID_PPV_ARGS(&pipeline_effect_)))) {
+    REXLOG_ERROR("D3D12ImmediateDrawer: Failed to create the effect pipeline");
+    return false;
+  }
+  pipeline_blend_desc.DestBlend = D3D12_BLEND_ONE;
+  if (FAILED(device->CreateGraphicsPipelineState(&pipeline_desc,
+                                                 IID_PPV_ARGS(&pipeline_effect_additive_)))) {
+    REXLOG_ERROR("D3D12ImmediateDrawer: Failed to create the additive effect pipeline");
     return false;
   }
 
@@ -385,6 +413,14 @@ void D3D12ImmediateDrawer::Begin(UIDrawContext& ui_draw_context, float coordinat
   current_scissor_.bottom = 0;
 
   current_primitive_topology_ = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
+  current_pipeline_ = nullptr;
+  current_effect_set_ = false;
+  coordinate_space_width_ = coordinate_space_width > 0.0f
+                                ? coordinate_space_width
+                                : float(d3d12_ui_draw_context.render_target_width());
+  coordinate_space_height_ = coordinate_space_height > 0.0f
+                                 ? coordinate_space_height
+                                 : float(d3d12_ui_draw_context.render_target_height());
   current_texture_ = nullptr;
   current_texture_descriptor_heap_index_ = D3D12DescriptorHeapPool::kHeapIndexInvalid;
   current_sampler_index_ = SamplerIndex::kInvalid;
@@ -540,7 +576,11 @@ void D3D12ImmediateDrawer::Draw(const ImmediateDraw& draw) {
       break;
     case ImmediatePrimitiveType::kTriangles:
       primitive_topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-      pipeline = pipeline_triangle_.Get();
+      if (draw.effect) {
+        pipeline = draw.additive ? pipeline_effect_additive_.Get() : pipeline_effect_.Get();
+      } else {
+        pipeline = pipeline_triangle_.Get();
+      }
       break;
     default:
       assert_unhandled_case(draw.primitive_type);
@@ -549,7 +589,29 @@ void D3D12ImmediateDrawer::Draw(const ImmediateDraw& draw) {
   if (current_primitive_topology_ != primitive_topology) {
     current_primitive_topology_ = primitive_topology;
     command_list->IASetPrimitiveTopology(primitive_topology);
+  }
+  if (current_pipeline_ != pipeline) {
+    current_pipeline_ = pipeline;
     command_list->SetPipelineState(pipeline);
+  }
+  if (draw.effect && draw.primitive_type == ImmediatePrimitiveType::kTriangles) {
+    ImmediateEffect effect = *draw.effect;
+    effect.display_size[0] = coordinate_space_width_;
+    effect.display_size[1] = coordinate_space_height_;
+    effect.inverse_display_size[0] = 1.0f / coordinate_space_width_;
+    effect.inverse_display_size[1] = 1.0f / coordinate_space_height_;
+    effect.pixel_to_coordinates[0] =
+        coordinate_space_width_ /
+        float(std::max(d3d12_ui_draw_context.render_target_width(), uint32_t(1)));
+    effect.pixel_to_coordinates[1] =
+        coordinate_space_height_ /
+        float(std::max(d3d12_ui_draw_context.render_target_height(), uint32_t(1)));
+    if (!current_effect_set_ || std::memcmp(&effect, &current_effect_, sizeof(effect)) != 0) {
+      current_effect_ = effect;
+      current_effect_set_ = true;
+      command_list->SetGraphicsRoot32BitConstants(
+          UINT(RootParameter::kEffect), UINT(sizeof(effect) / sizeof(uint32_t)), &effect, 0);
+    }
   }
 
   // Draw.

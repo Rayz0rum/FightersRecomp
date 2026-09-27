@@ -19,6 +19,7 @@
 #include <rex/logging.h>
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/imgui_drawer.h>
+#include <rex/ui/imgui_effects.h>
 #include <rex/ui/ui_event.h>
 #include <rex/ui/window.h>
 
@@ -460,14 +461,76 @@ void ImGuiDrawer::RenderDrawLists(ImDrawData* data, UIDrawContext& ui_draw_conte
     batch.index_count = cmd_list->IdxBuffer.size();
     immediate_drawer_->BeginDrawBatch(batch);
 
+    // Shader effects set by callbacks (rex/ui/imgui_effects.h), for the rest of
+    // the list.
+    ImmediateEffect effect;
+    bool additive = false;
+    ImmediateEffect draw_effect;
+
     for (int j = 0; j < cmd_list->CmdBuffer.size(); ++j) {
       const auto& cmd = cmd_list->CmdBuffer[j];
+
+      if (cmd.UserCallback) {
+        if (cmd.UserCallback == ImDrawCallback_ResetRenderState) {
+          effect = ImmediateEffect();
+          additive = false;
+          continue;
+        }
+        intptr_t code = reinterpret_cast<intptr_t>(cmd.UserCallback);
+        if (code < 0 && code >= -16) {
+          auto* data = static_cast<const ImGuiEffectCallbackData*>(cmd.UserCallbackData);
+          switch (static_cast<ImGuiEffectCallback>(code)) {
+            case ImGuiEffectCallback::kSetGradient:
+              std::memcpy(effect.bounds_min, data->set_gradient.bounds_min, sizeof(float) * 2);
+              std::memcpy(effect.bounds_max, data->set_gradient.bounds_max, sizeof(float) * 2);
+              effect.gradient_top_left = data->set_gradient.gradient_top_left;
+              effect.gradient_top_right = data->set_gradient.gradient_top_right;
+              effect.gradient_bottom_right = data->set_gradient.gradient_bottom_right;
+              effect.gradient_bottom_left = data->set_gradient.gradient_bottom_left;
+              break;
+            case ImGuiEffectCallback::kSetShaderModifier:
+              effect.shader_modifier = data->set_shader_modifier.shader_modifier;
+              break;
+            case ImGuiEffectCallback::kSetOrigin:
+              std::memcpy(effect.origin, data->set_origin.origin, sizeof(float) * 2);
+              break;
+            case ImGuiEffectCallback::kSetScale:
+              std::memcpy(effect.scale, data->set_scale.scale, sizeof(float) * 2);
+              break;
+            case ImGuiEffectCallback::kSetMarqueeFade:
+              std::memcpy(effect.bounds_min, data->set_marquee_fade.bounds_min, sizeof(float) * 2);
+              std::memcpy(effect.bounds_max, data->set_marquee_fade.bounds_max, sizeof(float) * 2);
+              break;
+            case ImGuiEffectCallback::kSetOutline:
+              effect.outline = data->set_outline.outline;
+              break;
+            case ImGuiEffectCallback::kSetProceduralOrigin:
+              std::memcpy(effect.procedural_origin, data->set_procedural_origin.procedural_origin,
+                          sizeof(float) * 2);
+              break;
+            case ImGuiEffectCallback::kSetAdditive:
+              additive = data->set_additive.enabled;
+              break;
+          }
+          continue;
+        }
+        cmd.UserCallback(cmd_list, &cmd);
+        continue;
+      }
 
       ImmediateDraw draw;
       draw.primitive_type = ImmediatePrimitiveType::kTriangles;
       draw.count = cmd.ElemCount;
       draw.index_offset = cmd.IdxOffset;
       draw.texture = reinterpret_cast<ImmediateTexture*>(cmd.GetTexID());
+      draw_effect = effect;
+      if (draw.texture && (draw.texture->flags & ImmediateTexture::kFlagSignedDistanceField)) {
+        draw_effect.texture_flags |= ImmediateEffect::kTextureFlagSignedDistanceField;
+      }
+      if (!draw_effect.IsIdentity() || additive) {
+        draw.effect = &draw_effect;
+        draw.additive = additive;
+      }
       draw.scissor = true;
       draw.scissor_left = cmd.ClipRect.x;
       draw.scissor_top = cmd.ClipRect.y;

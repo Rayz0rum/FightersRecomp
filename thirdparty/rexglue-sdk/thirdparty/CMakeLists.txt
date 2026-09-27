@@ -611,6 +611,7 @@ add_library(libavcodec STATIC
     ${FFMPEG_DIR}/libavcodec/mdct_fixed_32.c
     ${FFMPEG_DIR}/libavcodec/sinewin.c
     ${FFMPEG_DIR}/libavcodec/wma_freqs.c
+    ${FFMPEG_DIR}/libavcodec/hcadec.c
     ${FFMPEG_DIR}/libavcodec/wmaprodec.c
     ${FFMPEG_DIR}/libavcodec/wmadec.c
     ${FFMPEG_DIR}/libavcodec/wma.c

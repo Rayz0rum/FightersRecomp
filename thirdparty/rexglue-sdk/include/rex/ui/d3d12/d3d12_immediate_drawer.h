@@ -106,12 +106,17 @@ class D3D12ImmediateDrawer final : public ImmediateDrawer {
     kTexture,
     kSampler,
     kCoordinateSpaceSizeInv,
+    // ImmediateEffect (effect pipelines only).
+    kEffect,
 
     kCount
   };
 
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_triangle_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_line_;
+  // Triangles with ImmediateEffect, alpha and additive blending.
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_effect_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_effect_additive_;
 
   Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sampler_heap_;
   D3D12_CPU_DESCRIPTOR_HANDLE sampler_heap_cpu_start_;
@@ -153,6 +158,12 @@ class D3D12ImmediateDrawer final : public ImmediateDrawer {
   bool batch_has_index_buffer_;
   D3D12_RECT current_scissor_;
   D3D_PRIMITIVE_TOPOLOGY current_primitive_topology_;
+  ID3D12PipelineState* current_pipeline_;
+  // The effect constants currently set (valid if current_effect_set_).
+  ImmediateEffect current_effect_;
+  bool current_effect_set_;
+  float coordinate_space_width_ = 1.0f;
+  float coordinate_space_height_ = 1.0f;
   ID3D12Resource* current_texture_;
   uint64_t current_texture_descriptor_heap_index_;
   SamplerIndex current_sampler_index_;

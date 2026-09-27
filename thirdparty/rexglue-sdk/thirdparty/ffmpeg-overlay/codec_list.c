@@ -5,6 +5,9 @@ static const AVCodec* const codec_list[] = {
 #if CONFIG_MP3_DECODER
     &ff_mp3_decoder,
 #endif
+#if CONFIG_HCA_DECODER
+    &ff_hca_decoder,
+#endif
 #if CONFIG_WMAPRO_DECODER
     &ff_wmapro_decoder,
 #endif

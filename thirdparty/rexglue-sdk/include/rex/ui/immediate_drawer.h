@@ -33,6 +33,13 @@ class ImmediateTexture {
   // Texture height, in pixels.
   uint32_t height;
 
+  enum : uint32_t {
+    // Holds a signed distance field (in R, 0.5 at the edge) rather than
+    // colors - drawn as text with ImmediateEffect.
+    kFlagSignedDistanceField = 1u << 0,
+  };
+  uint32_t flags = 0;
+
  protected:
   ImmediateTexture(uint32_t width, uint32_t height) : width(width), height(height) {}
 };
@@ -64,6 +71,61 @@ struct ImmediateDrawBatch {
   int index_count = 0;
 };
 
+// Shader effects of a draw (UnleashedRecomp-style ImGui effects: gradients,
+// procedural patterns, text outlines and bevels, transforms). Must match the
+// EffectConstants buffer of the effect shaders.
+struct ImmediateEffect {
+  enum : uint32_t {
+    kModifierNone = 0,
+    kModifierScanline = 1,
+    kModifierCheckerboard = 2,
+    kModifierScanlineButton = 3,
+    kModifierTextSkew = 4,
+    kModifierHorizontalMarqueeFade = 5,
+    kModifierVerticalMarqueeFade = 6,
+    kModifierGrayscale = 7,
+    kModifierTitleBevel = 8,
+    kModifierCategoryBevel = 9,
+    kModifierRectangleBevel = 10,
+    kModifierLowQualityText = 11,
+  };
+  enum : uint32_t {
+    kTextureFlagSignedDistanceField = 1u << 0,
+  };
+
+  // Gradient (or marquee fade) bounds in the coordinate space - no gradient
+  // if equal.
+  float bounds_min[2] = {};
+  float bounds_max[2] = {};
+  // R8G8B8A8 (little-endian) gradient corner colors.
+  uint32_t gradient_top_left = 0;
+  uint32_t gradient_top_right = 0;
+  uint32_t gradient_bottom_right = 0;
+  uint32_t gradient_bottom_left = 0;
+  uint32_t shader_modifier = kModifierNone;
+  uint32_t texture_flags = 0;
+  // Filled by the drawer.
+  float display_size[2] = {};
+  float inverse_display_size[2] = {};
+  // Vertex transform: origin + (position - origin) * scale.
+  float origin[2] = {};
+  float scale[2] = {1.0f, 1.0f};
+  // Origin of the procedural patterns.
+  float procedural_origin[2] = {};
+  // Signed distance field text outline, in the SDF's pixel range units.
+  float outline = 0.0f;
+  float padding0 = 0.0f;
+  // Filled by the drawer.
+  float pixel_to_coordinates[2] = {};
+
+  // Whether drawing with these is the same as without effects.
+  bool IsIdentity() const {
+    return bounds_min[0] == bounds_max[0] && bounds_min[1] == bounds_max[1] &&
+           shader_modifier == kModifierNone && texture_flags == 0 && scale[0] == 1.0f &&
+           scale[1] == 1.0f && outline == 0.0f;
+  }
+};
+
 struct ImmediateDraw {
   // Primitive type the vertices/indices represent.
   ImmediatePrimitiveType primitive_type = ImmediatePrimitiveType::kTriangles;
@@ -85,6 +147,12 @@ struct ImmediateDraw {
   float scissor_top = 0.0f;
   float scissor_right = 0.0f;
   float scissor_bottom = 0.0f;
+
+  // Shader effects, or nullptr for plain drawing (not supported by every
+  // implementation - drawn plainly then).
+  const ImmediateEffect* effect = nullptr;
+  // Additive rather than alpha blending (with effects).
+  bool additive = false;
 };
 
 class ImmediateDrawer {
