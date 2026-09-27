@@ -119,10 +119,14 @@ const char* LanguageCode(ELanguage language) {
 }  // namespace
 
 const std::string& Localise(std::string_view key) {
+  return Localise(key, Config::Language);
+}
+
+const std::string& Localise(std::string_view key, ELanguage language) {
   if (!g_pack) return g_localeMissing;
   auto it = g_pack->strings.find(key);
   if (it == g_pack->strings.end()) return g_localeMissing;
-  auto lang = it->second.find(LanguageCode(Config::Language));
+  auto lang = it->second.find(LanguageCode(language));
   if (lang == it->second.end()) lang = it->second.find("en");
   return lang == it->second.end() ? g_localeMissing : lang->second;
 }
@@ -182,9 +186,9 @@ bool Load(rex::ui::ImmediateDrawer& drawer) {
         break;
       case InstallerPackType::kFont:
         if (std::string_view(e.name) == "font_body") {
-          g_pack->body_font = InstallerFont::Create(drawer, data, e.width, e.height, 1.18f);
+          g_pack->body_font = InstallerFont::Create(drawer, data, e.width, e.height, 1.0f);
         } else if (std::string_view(e.name) == "font_title") {
-          g_pack->title_font = InstallerFont::Create(drawer, data, e.width, e.height, 1.12f);
+          g_pack->title_font = InstallerFont::Create(drawer, data, e.width, e.height, 1.0f);
         }
         break;
       case InstallerPackType::kSpriteSheet: {

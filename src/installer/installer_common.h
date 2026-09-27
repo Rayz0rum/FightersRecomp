@@ -45,6 +45,7 @@ extern float g_aspectRatioScale;
 void UpdateAspectRatio(const ImVec2& display_size);
 
 const std::string& Localise(std::string_view key);
+const std::string& Localise(std::string_view key, ELanguage language);
 extern std::string g_localeMissing;
 
 enum class InstallerSound {

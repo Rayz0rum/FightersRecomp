@@ -86,8 +86,15 @@ void ResetAdditive();
 float Scale(float size);
 double ComputeLinearMotion(double duration, double offset, double total);
 double ComputeMotion(double duration, double offset, double total);
-// The Sonic the Fighters menu window (UnleashedRecomp: its pause container).
-void DrawPauseContainer(ImVec2 min, ImVec2 max, float alpha = 1);
+// Sonic the Fighters' menu panels, measured from the game at 1280x720 (sizes
+// in that layout, scaled): the translucent navy body (min, max) over a white
+// frame 9 units up and to the left, with the game's bevels and drop shadow.
+// UnleashedRecomp: its pause container.
+void DrawStfPanel(ImVec2 min, ImVec2 max, float alpha = 1.0f, bool frame = true);
+// The window's corner tab with its animated dots, at the frame's top left.
+void DrawStfTab(ImVec2 frameMin, float alpha = 1.0f);
+// The white line under a window's title and above its choices.
+void DrawStfRule(float minX, float maxX, float y, float alpha = 1.0f);
 void DrawTextBasic(const InstallerFont* font, float fontSize, const ImVec2& pos, ImU32 colour,
                    const char* text);
 void DrawTextWithMarquee(const InstallerFont* font, float fontSize, const ImVec2& position,
@@ -126,7 +133,7 @@ ImVec2 Lerp(const ImVec2& a, const ImVec2& b, float t);
 ImU32 ColourLerp(ImU32 c0, ImU32 c1, float t);
 void DrawVersionString(const InstallerFont* font, const ImU32 col = IM_COL32(255, 255, 255, 70));
 // The Sonic the Fighters menu selection bar.
-void DrawSelectionContainer(ImVec2 min, ImVec2 max, bool fadeTop = false);
+void DrawSelectionContainer(ImVec2 min, ImVec2 max, float alpha = 1.0f);
 void DrawToggleLight(ImVec2 pos, bool isEnabled, float alpha = 1.0f);
 const char* CalcWordWrapPositionA(const InstallerFont* font, float scale, const char* text,
                                   const char* text_end, float wrap_width);

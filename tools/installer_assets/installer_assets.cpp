@@ -461,8 +461,8 @@ Coverage GlyphCoverage(const FontMap& map, const Image& atlas, uint32_t code, fl
   c.origin_y = 0;
   c.advance = float(g.ink_w) + tracking;
   if (code == ' ') {
-    // The game's space is a whole cell - a regular word space instead.
-    c.advance = map.cell_h * 0.3f;
+    // The glyph is a whole cell; the game's menus space words by about half.
+    c.advance = map.cell_h * 0.55f;
   } else if (code == 0x3000) {
     c.advance = float(map.cell_w);
   }
@@ -1129,7 +1129,7 @@ int main(int argc, char** argv) {
     // Textures: 0 - debug font, 1 - title font, 2 - body font.
     const Image& body_atlas = font_textures.textures.at(2);
     const Image& title_atlas = font_textures.textures.at(1);
-    AddFont(pack, "font_body", maps.at(0), body_atlas, codes, 2.0f, nullptr, nullptr);
+    AddFont(pack, "font_body", maps.at(0), body_atlas, codes, 3.5f, nullptr, nullptr);
     std::set<uint32_t> title_codes;
     for (uint32_t c : codes) {
       if (c < 0x250) title_codes.insert(c);
@@ -1146,6 +1146,20 @@ int main(int argc, char** argv) {
     pack.AddImage("loading_arc", cmn.Get(74));
     pack.AddImage("ring_glow", cmn.Get(71));
     pack.AddImage("glow_dot", cmn.Get(15));
+    // The menu window's corner tab, without its 3x3 dots (6x6 at 14,11 every
+    // 10 pixels), which the installer animates like the game.
+    Image tab = cmn.Get(16);
+    for (int j = 0; j < 3; ++j) {
+      for (int i = 0; i < 3; ++i) {
+        for (int y = 0; y < 6; ++y) {
+          for (int x = 0; x < 6; ++x) {
+            uint8_t* p = tab.At(14 + 10 * i + x, 11 + 10 * j + y);
+            p[0] = p[1] = p[2] = p[3] = 255;
+          }
+        }
+      }
+    }
+    pack.AddImage("window_tab", tab);
 
     // The project's logo.
     if (!logo.empty()) {

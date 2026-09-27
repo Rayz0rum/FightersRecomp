@@ -183,33 +183,118 @@ double ComputeMotion(double duration, double offset, double total) {
   return sqrt(ComputeLinearMotion(duration, offset, total));
 }
 
-void DrawPauseContainer(ImVec2 min, ImVec2 max, float alpha) {
-  // Sonic the Fighters' menu window: a translucent navy body with a white
-  // frame, a light blue inner line and the dotted tab in the corner.
+namespace {
+
+ImU32 StfColour(int r, int g, int b, float a, float alpha) {
+  return IM_COL32(r, g, b, int(std::clamp(a * alpha, 0.0f, 255.0f)));
+}
+
+// A band of the frame along one side of (min, max): dark, white, then grey
+// going inwards.
+void DrawStfFrameBand(ImDrawList* drawList, ImVec2 min, ImVec2 max, int side, float alpha) {
+  struct Layer {
+    float from, to;
+    int grey;
+  };
+  constexpr Layer kLayers[] = {{0, 2, 81}, {2, 8, 255}, {8, 9, 205}};
+  for (const Layer& layer : kLayers) {
+    ImVec2 a = min, b = max;
+    switch (side) {
+      case 0: a.y = min.y + Scale(layer.from); b.y = min.y + Scale(layer.to); break;  // top
+      case 1: a.x = min.x + Scale(layer.from); b.x = min.x + Scale(layer.to); break;  // left
+      case 2: a.x = max.x - Scale(layer.to); b.x = max.x - Scale(layer.from); break;  // right
+      default: a.y = max.y - Scale(layer.to); b.y = max.y - Scale(layer.from); break;  // bottom
+    }
+    drawList->AddRectFilled(a, b, StfColour(layer.grey, layer.grey, layer.grey, 255, alpha));
+  }
+}
+
+}  // namespace
+
+void DrawStfPanel(ImVec2 min, ImVec2 max, float alpha, bool frame) {
+  // Measured from the game's menus at 1280x720.
   auto drawList = ImGui::GetBackgroundDrawList();
-  auto a = [&](float v) { return int(std::clamp(v * alpha, 0.0f, 255.0f)); };
-  drawList->AddRectFilledMultiColor(min, max, IM_COL32(38, 58, 112, a(232)),
-                                    IM_COL32(38, 58, 112, a(232)), IM_COL32(8, 18, 54, a(232)),
-                                    IM_COL32(8, 18, 54, a(232)));
-  // Horizontal bands, like the game's panels.
-  SetShaderModifier(IMGUI_SHADER_MODIFIER_SCANLINE);
-  drawList->AddRectFilled(min, max, IM_COL32(120, 160, 255, a(10)));
-  SetShaderModifier(IMGUI_SHADER_MODIFIER_NONE);
-  float frame = Scale(3.0f);
-  drawList->AddRect({min.x - frame * 0.5f, min.y - frame * 0.5f},
-                    {max.x + frame * 0.5f, max.y + frame * 0.5f}, IM_COL32(255, 255, 255, a(235)),
-                    0.0f, 0, frame);
-  drawList->AddRect({min.x + Scale(4), min.y + Scale(4)}, {max.x - Scale(4), max.y - Scale(4)},
-                    IM_COL32(120, 170, 255, a(150)), 0.0f, 0, Scale(1.0f));
-  // Dotted tab.
-  float dot = Scale(3.0f), gap = Scale(2.0f);
-  ImVec2 tab = {min.x + Scale(8), min.y + Scale(8)};
-  for (int y = 0; y < 3; ++y) {
-    for (int x = 0; x < 3; ++x) {
-      ImVec2 p = {tab.x + x * (dot + gap), tab.y + y * (dot + gap)};
-      drawList->AddRectFilled(p, {p.x + dot, p.y + dot}, IM_COL32(255, 255, 255, a(200)));
+  auto u = Scale(1.0f);
+  auto c = [&](int r, int g, int b, float a) { return StfColour(r, g, b, a, alpha); };
+  auto hGradient = [&](float x0, float x1, float y0, float y1, ImU32 left, ImU32 right) {
+    drawList->AddRectFilledMultiColor({x0, y0}, {x1, y1}, left, right, right, left);
+  };
+  auto vGradient = [&](float x0, float x1, float y0, float y1, ImU32 top, ImU32 bottom) {
+    drawList->AddRectFilledMultiColor({x0, y0}, {x1, y1}, top, top, bottom, bottom);
+  };
+
+  // Drop shadow, below and to the right.
+  vGradient(min.x + 8 * u, max.x + 8 * u, max.y, max.y + 12 * u, c(0, 0, 0, 205), c(0, 0, 0, 0));
+  hGradient(max.x, max.x + 9 * u, min.y + 8 * u, max.y, c(0, 0, 0, 190), c(0, 0, 0, 0));
+
+  // The white frame behind: only its top and left show outside the body.
+  if (frame) {
+    ImVec2 fmin = {min.x - 9 * u, min.y - 9 * u}, fmax = {max.x - 9 * u, max.y - 9 * u};
+    DrawStfFrameBand(drawList, fmin, {fmax.x, min.y}, 0, alpha);
+    DrawStfFrameBand(drawList, {fmin.x, fmin.y + 2 * u}, {min.x, fmax.y}, 1, alpha);
+    DrawStfFrameBand(drawList, {min.x, fmin.y}, {fmax.x, min.y}, 2, alpha);
+    DrawStfFrameBand(drawList, {fmin.x, min.y}, {min.x, fmax.y}, 3, alpha);
+  }
+
+  // Body.
+  drawList->AddRectFilled(min, max, c(2, 18, 50, 207));
+  // Light edge at the top and left, glowing inwards.
+  drawList->AddRectFilled({min.x, min.y + u}, {max.x, min.y + 2 * u}, c(112, 116, 124, 255));
+  drawList->AddRectFilled({min.x, min.y + 2 * u}, {max.x, min.y + 3 * u}, c(166, 177, 202, 235));
+  vGradient(min.x, max.x, min.y + 3 * u, min.y + 13 * u, c(140, 155, 185, 110), c(140, 155, 185, 0));
+  drawList->AddRectFilled({min.x + u, min.y}, {min.x + 2 * u, max.y}, c(95, 100, 112, 200));
+  hGradient(min.x + 2 * u, min.x + 12 * u, min.y, max.y, c(130, 145, 175, 95), c(130, 145, 175, 0));
+  // Rails inside the right and bottom edges, then a glow up to the edge.
+  for (int i = 0; i < 3; ++i) {
+    float d = 14.0f - 2.0f * i;
+    ImU32 line = i == 1 ? c(150, 165, 200, 50) : c(0, 6, 22, 120);
+    drawList->AddRectFilled({max.x - d * u, min.y}, {max.x - (d - 1.5f) * u, max.y}, line);
+    drawList->AddRectFilled({min.x, max.y - d * u}, {max.x, max.y - (d - 1.5f) * u}, line);
+  }
+  hGradient(max.x - 8 * u, max.x - 2 * u, min.y, max.y, c(140, 155, 185, 0), c(140, 155, 185, 120));
+  vGradient(min.x, max.x, max.y - 8 * u, max.y - 2 * u, c(140, 155, 185, 0), c(140, 155, 185, 120));
+  drawList->AddRectFilled({max.x - 2 * u, min.y}, {max.x - u, max.y}, c(150, 160, 185, 170));
+  drawList->AddRectFilled({min.x, max.y - 2 * u}, {max.x, max.y - u}, c(150, 160, 185, 190));
+  // Outline.
+  drawList->AddRectFilled(min, {max.x, min.y + u}, c(76, 76, 76, 255));
+  drawList->AddRectFilled(min, {min.x + u, max.y}, c(76, 76, 76, 255));
+  drawList->AddRectFilled({max.x - u, min.y}, max, c(33, 33, 33, 255));
+  drawList->AddRectFilled({min.x, max.y - u}, max, c(33, 33, 33, 255));
+}
+
+void DrawStfTab(ImVec2 frameMin, float alpha) {
+  auto drawList = ImGui::GetBackgroundDrawList();
+  // The game's sprite, drawn at its 1920x1080 size.
+  constexpr float kScale = 2.0f / 3.0f;
+  if (GuestTexture* tab = InstallerAssets::Texture("window_tab")) {
+    drawList->AddImage(TexRef(tab), frameMin,
+                       {frameMin.x + Scale(tab->width * kScale), frameMin.y + Scale(tab->height * kScale)},
+                       {0, 0}, {1, 1}, IM_COL32(255, 255, 255, int(255 * alpha)));
+  }
+  // The dots: a gap goes round the outer eight clockwise from the top right,
+  // once a second, and each dot fades back in behind it.
+  constexpr int kRing[8][2] = {{2, 0}, {2, 1}, {2, 2}, {1, 2}, {0, 2}, {0, 1}, {0, 0}, {1, 0}};
+  double time = ImGui::GetTime();
+  for (int j = 0; j < 3; ++j) {
+    for (int i = 0; i < 3; ++i) {
+      float brightness = 1.0f;
+      for (int k = 0; k < 8; ++k) {
+        if (kRing[k][0] == i && kRing[k][1] == j) {
+          double since = std::fmod(time - k / 8.0 + 8.0, 1.0);
+          brightness = float(std::clamp((since - 0.06) / 0.4, 0.0, 1.0));
+        }
+      }
+      ImVec2 p = {frameMin.x + Scale((14 + 10 * i) * kScale), frameMin.y + Scale((11 + 10 * j) * kScale)};
+      drawList->AddRectFilled(p, {p.x + Scale(6 * kScale), p.y + Scale(6 * kScale)},
+                              IM_COL32(141, 141, 141, int(255 * alpha * brightness)));
     }
   }
+}
+
+void DrawStfRule(float minX, float maxX, float y, float alpha) {
+  auto drawList = ImGui::GetBackgroundDrawList();
+  drawList->AddRectFilled({minX, y}, {maxX, y + Scale(2)}, StfColour(252, 253, 253, 255, alpha));
+  drawList->AddRectFilled({minX, y + Scale(2)}, {maxX, y + Scale(3)}, StfColour(110, 116, 132, 200, alpha));
 }
 
 void DrawTextBasic(const InstallerFont* font, float fontSize, const ImVec2& pos, ImU32 colour,
@@ -649,35 +734,19 @@ void DrawVersionString(const InstallerFont* font, const ImU32 col) {
                 col, g_versionString);
 }
 
-void DrawSelectionContainer(ImVec2 min, ImVec2 max, bool fadeTop) {
-  // Sonic the Fighters' selection bar: a bright blue band fading at the
-  // sides, with cyan edges.
-  (void)fadeTop;
+void DrawSelectionContainer(ImVec2 min, ImVec2 max, float alpha) {
+  // The game's selection bar: flat blue, darkening over its last 149 units at
+  // each end, with light edges.
   auto drawList = ImGui::GetBackgroundDrawList();
-
-  static auto breatheStart = ImGui::GetTime();
-  auto alpha = BREATHE_MOTION(1.0f, 0.7f, breatheStart, 0.92f);
-  auto a = [&](float v) { return int(std::clamp(v * alpha, 0.0f, 255.0f)); };
-  float midX = (min.x + max.x) * 0.5f;
-  drawList->AddRectFilledMultiColor(min, {midX, max.y}, IM_COL32(0, 60, 140, a(60)),
-                                    IM_COL32(0, 150, 235, a(235)), IM_COL32(0, 110, 205, a(235)),
-                                    IM_COL32(0, 40, 110, a(60)));
-  drawList->AddRectFilledMultiColor({midX, min.y}, max, IM_COL32(0, 150, 235, a(235)),
-                                    IM_COL32(0, 60, 140, a(60)), IM_COL32(0, 40, 110, a(60)),
-                                    IM_COL32(0, 110, 205, a(235)));
-  float line = Scale(2.0f);
-  drawList->AddRectFilledMultiColor(min, {midX, min.y + line}, IM_COL32(60, 220, 255, 0),
-                                    IM_COL32(120, 235, 255, a(255)), IM_COL32(120, 235, 255, a(255)),
-                                    IM_COL32(60, 220, 255, 0));
-  drawList->AddRectFilledMultiColor({midX, min.y}, {max.x, min.y + line},
-                                    IM_COL32(120, 235, 255, a(255)), IM_COL32(60, 220, 255, 0),
-                                    IM_COL32(60, 220, 255, 0), IM_COL32(120, 235, 255, a(255)));
-  drawList->AddRectFilledMultiColor({min.x, max.y - line}, {midX, max.y},
-                                    IM_COL32(60, 220, 255, 0), IM_COL32(120, 235, 255, a(255)),
-                                    IM_COL32(120, 235, 255, a(255)), IM_COL32(60, 220, 255, 0));
-  drawList->AddRectFilledMultiColor({midX, max.y - line}, max, IM_COL32(120, 235, 255, a(255)),
-                                    IM_COL32(60, 220, 255, 0), IM_COL32(60, 220, 255, 0),
-                                    IM_COL32(120, 235, 255, a(255)));
+  auto c = [&](int r, int g, int b, float a) { return StfColour(r, g, b, a, alpha); };
+  float fade = std::min(Scale(149), (max.x - min.x) / 2);
+  drawList->AddRectFilled(min, max, c(2, 125, 198, 245));
+  drawList->AddRectFilledMultiColor(min, {min.x + fade, max.y}, c(11, 21, 44, 190), c(11, 21, 44, 0),
+                                    c(11, 21, 44, 0), c(11, 21, 44, 190));
+  drawList->AddRectFilledMultiColor({max.x - fade, min.y}, max, c(11, 21, 44, 0), c(11, 21, 44, 190),
+                                    c(11, 21, 44, 190), c(11, 21, 44, 0));
+  drawList->AddRectFilled(min, {max.x, min.y + Scale(1.5f)}, c(20, 150, 225, 200));
+  drawList->AddRectFilled({min.x, max.y - Scale(1.5f)}, max, c(10, 140, 215, 255));
 }
 
 void DrawToggleLight(ImVec2 pos, bool isEnabled, float alpha) {

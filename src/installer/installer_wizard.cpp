@@ -1,7 +1,9 @@
 // Ported from UnleashedRecomp's ui/installer_wizard.cpp (hedge-dev, GPL-3.0).
-// Changes: Sonic the Fighters' pages (its Xbox 360 World package, no title
-// update or DLC), art, fonts, sounds and colours; input from InstallerInput;
-// the Windows file dialog; drawn a frame at a time by the app's dialog.
+// Changes: drawn like Sonic the Fighters' menus (the page's window of choices
+// over the white card, with the game's characters, and the description panel
+// under it); its pages (the Xbox 360 World package, no title update or DLC),
+// fonts and sounds; input from InstallerInput; the Windows file dialog; drawn a
+// frame at a time by the app's dialog.
 
 #include "installer_wizard.h"
 
@@ -30,63 +32,38 @@
 
 const char* g_versionString = "Sonic the Fighters Recompiled DX";
 
-// One Shot Animations Constants
-static constexpr double SCANLINES_ANIMATION_TIME = 0.0;
-static constexpr double SCANLINES_ANIMATION_DURATION = 15.0;
+// Layout of Sonic the Fighters' menus at 1280x720, measured from the game.
+constexpr float CARD_X0 = 245.0f;
+constexpr float CARD_Y0 = 54.0f;
+constexpr float CARD_X1 = 1035.0f;
+constexpr float CARD_Y1 = 665.0f;
+constexpr float CHARACTER_SIZE = 600.0f;
+constexpr float CHARACTER_Y = 60.0f;
 
-static constexpr double MILES_ICON_ANIMATION_TIME = SCANLINES_ANIMATION_TIME + 10.0;
-static constexpr double MILES_ICON_ANIMATION_DURATION = 15.0;
+constexpr float WINDOW_X0 = 255.0f;
+constexpr float WINDOW_X1 = 1026.0f;
+constexpr float WINDOW_Y0 = 85.0f;
+// The lowest the window goes, above the description panel.
+constexpr float WINDOW_MAX_Y1 = 488.0f;
+constexpr float TEXT_MARGIN_X = 40.0f;
+constexpr float ROW_HEIGHT = 36.0f;
 
-static constexpr double IMAGE_ANIMATION_TIME = MILES_ICON_ANIMATION_TIME + MILES_ICON_ANIMATION_DURATION;
-static constexpr double IMAGE_ANIMATION_DURATION = 15.0;
+constexpr float DESCRIPTION_X0 = 97.0f;
+constexpr float DESCRIPTION_Y0 = 511.0f;
+constexpr float DESCRIPTION_X1 = 1192.0f;
+constexpr float DESCRIPTION_Y1 = 615.0f;
 
-static constexpr double TITLE_ANIMATION_TIME = SCANLINES_ANIMATION_DURATION;
-static constexpr double TITLE_ANIMATION_DURATION = 30.0;
+constexpr float BAND_Y = 624.0f;
 
-static constexpr double CONTAINER_LINE_ANIMATION_TIME = SCANLINES_ANIMATION_DURATION;
-static constexpr double CONTAINER_LINE_ANIMATION_DURATION = 23.0;
+// The game's fonts at their 1920x1080 size, and its line spacing.
+constexpr float BODY_FONT_SIZE = 46.0f * 2.0f / 3.0f;
+constexpr float TITLE_FONT_SIZE = 56.0f * 2.0f / 3.0f;
+constexpr float LINE_HEIGHT = 36.0f;
 
-static constexpr double CONTAINER_OUTER_TIME = SCANLINES_ANIMATION_DURATION + CONTAINER_LINE_ANIMATION_DURATION;
-static constexpr double CONTAINER_OUTER_DURATION = 23.0;
-
-static constexpr double CONTAINER_INNER_TIME = SCANLINES_ANIMATION_DURATION + CONTAINER_LINE_ANIMATION_DURATION + 8.0;
-static constexpr double CONTAINER_INNER_DURATION = 15.0;
-
-static constexpr double ALL_ANIMATIONS_FULL_DURATION = CONTAINER_INNER_TIME + CONTAINER_INNER_DURATION;
-static constexpr double QUITTING_EXTRA_DURATION = 60.0;
-
-static constexpr double INSTALL_ICONS_FADE_IN_ANIMATION_TIME = 0.0;
-static constexpr double INSTALL_ICONS_FADE_IN_ANIMATION_DURATION = 15.0;
-
-// Loop Animations Constants - their time range is [0.0, 1.0 + DELAY]
-static constexpr double ARROW_CIRCLE_LOOP_SPEED = 1;
-
-static constexpr double PULSE_ANIMATION_LOOP_SPEED = 1.5;
-static constexpr double PULSE_ANIMATION_LOOP_DELAY = 0.5;
-static constexpr double PULSE_ANIMATION_LOOP_FADE_HIGH_POINT = 0.5;
-
-constexpr float IMAGE_X = 161.5f;
-constexpr float IMAGE_Y = 103.5f;
-constexpr float IMAGE_WIDTH = 512.0f;
-constexpr float IMAGE_HEIGHT = 512.0f;
-
-constexpr float CONTAINER_X = 513.0f;
-constexpr float CONTAINER_Y = 226.0f;
-constexpr float CONTAINER_WIDTH = 526.5f;
-constexpr float CONTAINER_HEIGHT = 246.0f;
-constexpr float SIDE_CONTAINER_WIDTH = CONTAINER_WIDTH / 2.0f;
-
-constexpr float BOTTOM_X_GAP = 4.0f;
-constexpr float BOTTOM_Y_GAP = 5.0f;
-constexpr float CONTAINER_BUTTON_WIDTH = 250.0f;
-constexpr float CONTAINER_BUTTON_GAP = 9.0f;
-constexpr float BUTTON_HEIGHT = 22.0f;
-constexpr float BUTTON_TEXT_GAP = 28.0f;
-
-constexpr float BORDER_SIZE = 1.0f;
-constexpr float BORDER_OVERSHOOT = 36.0f;
-
-static constexpr size_t GRID_SIZE = 9;
+// Fades, in seconds.
+constexpr double APPEAR_DURATION = 0.3;
+constexpr double DISAPPEAR_DURATION = 0.5;
+constexpr double QUITTING_EXTRA_DURATION = 0.5;
 
 
 static InstallerFont* g_bodyFont;
@@ -100,9 +77,7 @@ static bool g_isQuitting = false;
 static std::filesystem::path g_installPath;
 static std::filesystem::path g_gameSourcePath;
 static std::array<GuestTexture*, 10> g_installTextures;
-static GuestTexture* g_sonicIcon;
 static GuestTexture* g_loadingArc;
-static GuestTexture* g_ringGlow;
 static GuestTexture* g_projectLogo;
 static Journal g_installerJournal;
 static Installer::Sources g_installerSources;
@@ -237,7 +212,7 @@ static void HandleInput(const InstallerInputEvent& event) {
         }
       }
 
-      if (newCursorIndex < 0) g_currentCursorIndex = -1;
+      // The selection stays when the mouse leaves the choices, like in the game's menus.
 
       break;
     }
@@ -246,38 +221,14 @@ static void HandleInput(const InstallerInputEvent& event) {
       break;
   }
 
-  if (tapDirection.x != 0.0f || tapDirection.y != 0.0f) {
-    if (g_currentCursorIndex >= int(g_currentCursorRects.size()) || g_currentCursorIndex < 0) {
+  // The choices are a list, like the game's menus: up and down go to the
+  // previous and next one, round from the ends.
+  int count = int(g_currentCursorRects.size());
+  if (tapDirection.y != 0.0f && count > 0) {
+    if (g_currentCursorIndex >= count || g_currentCursorIndex < 0) {
       newCursorIndex = g_currentCursorDefault;
     } else {
-      auto& currentRect = g_currentCursorRects[g_currentCursorIndex];
-      ImVec2 currentPoint = ImVec2(
-          (currentRect.first.x + currentRect.second.x) / 2.0f +
-              tapDirection.x * (currentRect.second.x - currentRect.first.x) / 2.0f,
-          (currentRect.first.y + currentRect.second.y) / 2.0f +
-              tapDirection.y * (currentRect.second.y - currentRect.first.y) / 2.0f);
-
-      float closestDistance = FLT_MAX;
-      for (size_t i = 0; i < g_currentCursorRects.size(); i++) {
-        if (g_currentCursorIndex == int(i)) {
-          continue;
-        }
-
-        auto& targetRect = g_currentCursorRects[i];
-        ImVec2 targetPoint = ImVec2(
-            (targetRect.first.x + targetRect.second.x) / 2.0f +
-                tapDirection.x * (targetRect.first.x - targetRect.second.x) / 2.0f,
-            (targetRect.first.y + targetRect.second.y) / 2.0f +
-                tapDirection.y * (targetRect.first.y - targetRect.second.y) / 2.0f);
-
-        ImVec2 delta = ImVec2(targetPoint.x - currentPoint.x, targetPoint.y - currentPoint.y);
-        float projectedDistance = delta.x * tapDirection.x + delta.y * tapDirection.y;
-        float manhattanDistance = std::abs(delta.x) + std::abs(delta.y);
-        if (projectedDistance > 0.0f && manhattanDistance < closestDistance) {
-          newCursorIndex = int(i);
-          closestDistance = manhattanDistance;
-        }
-      }
+      newCursorIndex = (g_currentCursorIndex + (tapDirection.y > 0.0f ? 1 : count - 1)) % count;
     }
   }
 
@@ -302,7 +253,6 @@ static const std::string& GetWizardText(WizardPage page) {
   return g_localeMissing;
 }
 
-// Sonic, Tails, Knuckles, Super Sonic, Eggman.
 // The character shown on each page (installing starts with Espio and goes
 // through them all).
 static const int WIZARD_INSTALL_TEXTURE_INDEX[] = {
@@ -315,36 +265,15 @@ static const int WIZARD_INSTALL_TEXTURE_INDEX[] = {
     9   // Force Robotnik on InstallFailed.
 };
 
-// These are ordered from bottom to top in a 3x2 grid.
+// The languages, in the order of the list.
 const char* LANGUAGE_TEXT[] = {
-    "FRANÇAIS",  // French
-    "DEUTSCH",   // German
-    "ENGLISH",   // English
-    "ESPAÑOL",   // Spanish
-    "ITALIANO",  // Italian
-    "日本語",    // Japanese
+    "English", "日本語", "Deutsch", "Français", "Español", "Italiano",
 };
 
 const ELanguage LANGUAGE_ENUM[] = {
-    ELanguage::French, ELanguage::German,  ELanguage::English,
-    ELanguage::Spanish, ELanguage::Italian, ELanguage::Japanese,
+    ELanguage::English, ELanguage::Japanese, ELanguage::German,
+    ELanguage::French,  ELanguage::Spanish,  ELanguage::Italian,
 };
-
-static double ComputeMotionInstaller(double timeAppear, double timeDisappear, double offset,
-                                     double total) {
-  return ComputeMotion(timeAppear, offset, total) *
-         (1.0 - ComputeMotion(timeDisappear, ALL_ANIMATIONS_FULL_DURATION - offset - total, total));
-}
-
-static double ComputeMotionInstallerLoop(double timeAppear, double speed, double offset) {
-  return std::clamp(fmod((ImGui::GetTime() - timeAppear) * speed, 1.0 + offset) - offset, 0.0,
-                    1.0) /
-         1.0;
-}
-
-static double ComputeHermiteMotionInstallerLoop(double timeAppear, double speed, double offset) {
-  return (cos(M_PI * ComputeMotionInstallerLoop(timeAppear, speed, offset) + M_PI) + 1) / 2;
-}
 
 static bool PushCursorRect(ImVec2 min, ImVec2 max, bool& cursorPressed, bool makeDefault = false) {
   int currentIndex = int(g_currentCursorRects.size());
@@ -377,606 +306,6 @@ static bool HasWideCharacters(const char* text) {
     if (*s >= 0xE3) return true;  // Kana and CJK (U+3000 and above).
   }
   return false;
-}
-
-static void DrawBackground() {
-  // The deep blue of Sonic the Fighters' menus.
-  auto& res = ImGui::GetIO().DisplaySize;
-  auto drawList = ImGui::GetBackgroundDrawList();
-  drawList->AddRectFilledMultiColor({0.0, 0.0}, res, IM_COL32(8, 26, 86, 255),
-                                    IM_COL32(8, 26, 86, 255), IM_COL32(0, 4, 30, 255),
-                                    IM_COL32(0, 4, 30, 255));
-}
-
-static void DrawLeftImage() {
-  int installTextureIndex = WIZARD_INSTALL_TEXTURE_INDEX[int(g_currentPage)];
-  if (g_currentPage == WizardPage::Installing) {
-    // Cycle through the available images while time passes during installation.
-    constexpr double InstallationSpeed = 1.0 / 15.0;
-    double installationTime = (ImGui::GetTime() - g_installerStartTime) * InstallationSpeed;
-    installTextureIndex += int(installationTime);
-  }
-
-  double imageAlpha = ComputeMotionInstaller(g_appearTime, g_disappearTime, IMAGE_ANIMATION_TIME,
-                                             IMAGE_ANIMATION_DURATION);
-  int a = int(std::lround(255.0 * imageAlpha));
-  GuestTexture* guestTexture = g_installTextures[installTextureIndex % g_installTextures.size()];
-  if (!guestTexture) return;
-  auto drawList = ImGui::GetBackgroundDrawList();
-  ImVec2 min = {g_aspectRatioOffsetX + Scale(IMAGE_X), g_aspectRatioOffsetY + Scale(IMAGE_Y)};
-  ImVec2 max = {min.x + Scale(IMAGE_WIDTH), min.y + Scale(IMAGE_HEIGHT)};
-  drawList->AddImage(TexRef(guestTexture), min, max, ImVec2(0, 0), ImVec2(1, 1),
-                     IM_COL32(255, 255, 255, a));
-}
-
-static void DrawHeaderIconsForInstallPhase(double iconsPosX, double iconsPosY, double iconsScale) {
-  auto drawList = ImGui::GetBackgroundDrawList();
-
-  // The game's loading arc, spinning.
-  ImVec2 arrowCircleMin = {g_aspectRatioOffsetX + Scale(float(iconsPosX - iconsScale / 2)),
-                           Scale(float(iconsPosY - iconsScale / 2))};
-  ImVec2 arrowCircleMax = {g_aspectRatioOffsetX + Scale(float(iconsPosX + iconsScale / 2)),
-                           Scale(float(iconsPosY + iconsScale / 2))};
-  ImVec2 center = {g_aspectRatioOffsetX + Scale(float(iconsPosX)) + 0.5f,
-                   Scale(float(iconsPosY)) - 0.5f};
-
-  float arrowCircleFadeMotion = float(ComputeMotionInstaller(
-      g_installerStartTime, g_installerEndTime, INSTALL_ICONS_FADE_IN_ANIMATION_TIME,
-      INSTALL_ICONS_FADE_IN_ANIMATION_DURATION));
-  float rotationMotion = float(ComputeMotionInstallerLoop(g_installerStartTime, ARROW_CIRCLE_LOOP_SPEED, 0));
-  float rotation = float(-2 * M_PI * rotationMotion);
-
-  // Calculate rotated corners
-  float cosCurrentAngle = cosf(rotation);
-  float sinCurrentAngle = sinf(rotation);
-  auto rotate = [&](ImVec2 v) {
-    return ImVec2(v.x * cosCurrentAngle - v.y * sinCurrentAngle,
-                  v.x * sinCurrentAngle + v.y * cosCurrentAngle);
-  };
-  ImVec2 corners[4] = {
-      rotate(ImVec2(arrowCircleMin.x - center.x, arrowCircleMin.y - center.y)),
-      rotate(ImVec2(arrowCircleMax.x - center.x, arrowCircleMin.y - center.y)),
-      rotate(ImVec2(arrowCircleMax.x - center.x, arrowCircleMax.y - center.y)),
-      rotate(ImVec2(arrowCircleMin.x - center.x, arrowCircleMax.y - center.y)),
-  };
-
-  for (int i = 0; i < IM_ARRAYSIZE(corners); ++i) {
-    corners[i].x += center.x;
-    corners[i].y += center.y;
-  }
-
-  if (g_loadingArc) {
-    drawList->AddImageQuad(TexRef(g_loadingArc), corners[0], corners[1], corners[2], corners[3],
-                           ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1),
-                           IM_COL32(120, 210, 255, int(200 * arrowCircleFadeMotion)));
-  }
-
-  // Pulse - a gold ring.
-  float pulseFadeMotion = float(ComputeMotionInstaller(g_installerStartTime, g_installerEndTime,
-                                                       INSTALL_ICONS_FADE_IN_ANIMATION_TIME,
-                                                       INSTALL_ICONS_FADE_IN_ANIMATION_DURATION));
-  float pulseMotion = float(ComputeMotionInstallerLoop(g_installerStartTime, PULSE_ANIMATION_LOOP_SPEED,
-                                                       PULSE_ANIMATION_LOOP_DELAY));
-  float pulseHermiteMotion = float(ComputeHermiteMotionInstallerLoop(
-      g_installerStartTime, PULSE_ANIMATION_LOOP_SPEED, PULSE_ANIMATION_LOOP_DELAY));
-
-  float pulseFade = float(pulseMotion / PULSE_ANIMATION_LOOP_FADE_HIGH_POINT);
-
-  if (pulseMotion >= PULSE_ANIMATION_LOOP_FADE_HIGH_POINT) {
-    // Calculate linear fade-out from high point time - ({PULSE_ANIMATION_LOOP_FADE_HIGH_POINT}, 1) - to loop end - (1, 0) -.
-    float m = float(-1 / (1 - PULSE_ANIMATION_LOOP_FADE_HIGH_POINT));
-    float b = float(m * (-PULSE_ANIMATION_LOOP_FADE_HIGH_POINT) + 1);
-
-    pulseFade = m * pulseMotion + b;
-  }
-
-  float pulseScale = float(iconsScale * pulseHermiteMotion * 1.5);
-
-  ImVec2 pulseMin = {g_aspectRatioOffsetX + Scale(float(iconsPosX - pulseScale / 2)),
-                     Scale(float(iconsPosY - pulseScale / 2))};
-  ImVec2 pulseMax = {g_aspectRatioOffsetX + Scale(float(iconsPosX + pulseScale / 2)),
-                     Scale(float(iconsPosY + pulseScale / 2))};
-  if (g_ringGlow) {
-    SetAdditive(true);
-    drawList->AddImage(TexRef(g_ringGlow), pulseMin, pulseMax, ImVec2(0, 0), ImVec2(1, 1),
-                       IM_COL32(255, 200, 40, int(255 * pulseFade * pulseFadeMotion)));
-    SetAdditive(false);
-  }
-}
-
-static void DrawHeaderIcons() {
-  auto drawList = ImGui::GetBackgroundDrawList();
-
-  float iconsPosX = 256.0f;
-  float iconsPosY = 80.0f;
-  float iconsScale = 62.0f;
-
-  // The little Sonic of the title screen (UnleashedRecomp: the Miles Electric icon).
-  float milesIconMotion = float(ComputeMotionInstaller(g_appearTime, g_disappearTime,
-                                                       MILES_ICON_ANIMATION_TIME,
-                                                       MILES_ICON_ANIMATION_DURATION));
-  float milesIconScale = iconsScale * (2 - milesIconMotion);
-
-  if (g_sonicIcon) {
-    float aspect = float(g_sonicIcon->width) / float(g_sonicIcon->height);
-    float h = milesIconScale * 1.2f, w = h * aspect;
-    ImVec2 milesElectricMin = {g_aspectRatioOffsetX + Scale(iconsPosX - w / 2),
-                               Scale(iconsPosY - h / 2)};
-    ImVec2 milesElectricMax = {g_aspectRatioOffsetX + Scale(iconsPosX + w / 2),
-                               Scale(iconsPosY + h / 2)};
-    drawList->AddImage(TexRef(g_sonicIcon), milesElectricMin, milesElectricMax, ImVec2(0, 0),
-                       ImVec2(1, 1), IM_COL32(255, 255, 255, int(255 * milesIconMotion)));
-  }
-
-  if (int(g_currentPage) >= int(WizardPage::Installing)) {
-    DrawHeaderIconsForInstallPhase(iconsPosX + 70.0f, iconsPosY, iconsScale);
-  }
-}
-
-static void DrawScanlineBars() {
-  double scanlinesAlpha = ComputeMotionInstaller(g_appearTime, g_disappearTime, 0.0,
-                                                 SCANLINES_ANIMATION_DURATION);
-
-  const uint32_t COLOR0 = IM_COL32(40, 150, 255, 0);
-  const uint32_t COLOR1 = IM_COL32(40, 150, 255, int(55 * scanlinesAlpha));
-
-  float height = Scale(105.0f) * float(ComputeMotionInstaller(g_appearTime, g_disappearTime, 0.0,
-                                                              SCANLINES_ANIMATION_DURATION));
-  if (height < 1e-6f) {
-    return;
-  }
-
-  auto& res = ImGui::GetIO().DisplaySize;
-  auto drawList = ImGui::GetBackgroundDrawList();
-
-  SetShaderModifier(IMGUI_SHADER_MODIFIER_SCANLINE);
-
-  // Top bar
-  drawList->AddRectFilledMultiColor({0.0f, 0.0f}, {res.x, height}, COLOR0, COLOR0, COLOR1, COLOR1);
-
-  // Bottom bar
-  ImVec2 max{0.0f, res.y - height};
-  SetProceduralOrigin(max);
-
-  drawList->AddRectFilledMultiColor({res.x, res.y}, max, COLOR0, COLOR0, COLOR1, COLOR1);
-
-  ResetProceduralOrigin();
-
-  SetShaderModifier(IMGUI_SHADER_MODIFIER_NONE);
-
-  // Installer text
-  auto& headerText = Localise(g_currentPage == WizardPage::Installing ? "Installer_Header_Installing"
-                                                                      : "Installer_Header_Installer");
-  auto alphaMotion = ComputeMotionInstaller(g_appearTime, g_disappearTime, TITLE_ANIMATION_TIME,
-                                            TITLE_ANIMATION_DURATION);
-  auto breatheMotion = 1.0f;
-
-  if (g_currentPage == WizardPage::Installing) {
-    // Breathing animation
-    static auto breatheStart = ImGui::GetTime();
-    breatheMotion = float(BREATHE_MOTION(1.0f, 0.55f, breatheStart, 1.5f));
-  }
-
-  float titleX = int(g_currentPage) >= int(WizardPage::Installing) ? 358.0f : 288.0f;
-  DrawTextWithOutline(g_titleFont, Scale(48.0f), {g_aspectRatioOffsetX + Scale(titleX), Scale(54.5f)},
-                      IM_COL32(255, 222, 0, int(255 * alphaMotion * breatheMotion)),
-                      headerText.c_str(), 4,
-                      IM_COL32(0, 0, 0, int(255 * alphaMotion * breatheMotion)),
-                      IMGUI_SHADER_MODIFIER_TITLE_BEVEL);
-
-  auto drawLine = [&](bool top) {
-    float y = top ? height : (res.y - height);
-
-    const uint32_t TOP_COLOR0 = IM_COL32(190, 225, 255, int(7 * scanlinesAlpha));
-    const uint32_t TOP_COLOR1 = IM_COL32(190, 225, 255, int(65 * scanlinesAlpha));
-    const uint32_t BOTTOM_COLOR0 = IM_COL32(150, 200, 255, int(65 * scanlinesAlpha));
-    const uint32_t BOTTOM_COLOR1 = IM_COL32(150, 200, 255, int(7 * scanlinesAlpha));
-
-    drawList->AddRectFilledMultiColor({0.0f, y - Scale(2.0f)}, {res.x, y},
-                                      top ? TOP_COLOR0 : BOTTOM_COLOR1,
-                                      top ? TOP_COLOR0 : BOTTOM_COLOR1,
-                                      top ? TOP_COLOR1 : BOTTOM_COLOR0,
-                                      top ? TOP_COLOR1 : BOTTOM_COLOR0);
-
-    drawList->AddRectFilledMultiColor({0.0f, y + Scale(1.0f)}, {res.x, y + Scale(3.0f)},
-                                      top ? BOTTOM_COLOR0 : TOP_COLOR1,
-                                      top ? BOTTOM_COLOR0 : TOP_COLOR1,
-                                      top ? BOTTOM_COLOR1 : TOP_COLOR0,
-                                      top ? BOTTOM_COLOR1 : TOP_COLOR0);
-
-    const uint32_t CENTER_COLOR = IM_COL32(90, 150, 230, int(255 * scanlinesAlpha));
-    drawList->AddRectFilled({0.0f, y}, {res.x, y + Scale(1.0f)}, CENTER_COLOR);
-  };
-
-  // Top bar line
-  drawLine(true);
-
-  // Bottom bar line
-  drawLine(false);
-
-  DrawHeaderIcons();
-  DrawVersionString(g_bodyFont, IM_COL32(255, 255, 255, int(70 * alphaMotion)));
-}
-
-static void DrawContainer(ImVec2 min, ImVec2 max, bool isTextArea) {
-  auto drawList = ImGui::GetBackgroundDrawList();
-
-  double gridAlpha = ComputeMotionInstaller(g_appearTime, g_disappearTime,
-                                            isTextArea ? CONTAINER_INNER_TIME : CONTAINER_OUTER_TIME,
-                                            isTextArea ? CONTAINER_INNER_DURATION : CONTAINER_OUTER_DURATION);
-  double gridOverlayAlpha = ComputeMotionInstaller(g_appearTime, g_disappearTime,
-                                                   CONTAINER_INNER_TIME, CONTAINER_INNER_DURATION);
-
-  const uint32_t gridColor = IM_COL32(0, 22, 60, int((isTextArea ? 223 : 255) * gridAlpha));
-  const uint32_t gridOverlayColor = IM_COL32(0, 16, 50, int(128 * gridOverlayAlpha));
-
-  float gridSize = Scale(GRID_SIZE);
-
-  SetShaderModifier(IMGUI_SHADER_MODIFIER_CHECKERBOARD);
-  SetAdditive(true);
-  drawList->AddRectFilled(min, max, gridColor);
-  SetAdditive(false);
-  SetShaderModifier(IMGUI_SHADER_MODIFIER_NONE);
-
-  if (isTextArea) {
-    drawList->AddRectFilled(min, max, gridOverlayColor);
-  }
-
-  // The draw area
-  drawList->PushClipRect({min.x - gridSize * 2.0f, min.y + gridSize * 2.0f},
-                         {max.x - gridSize * 2.0f + 1.0f, max.y - gridSize * 2.0f + 1.0f});
-}
-
-static void DrawDescriptionContainer() {
-  auto& res = ImGui::GetIO().DisplaySize;
-  auto drawList = ImGui::GetBackgroundDrawList();
-  auto fontSize = Scale(28.0f);
-  auto annotationFontSize = fontSize * ANNOTATION_FONT_SIZE_MODIFIER;
-
-  ImVec2 descriptionMin = {std::round(g_aspectRatioOffsetX + Scale(CONTAINER_X + 0.5f)),
-                           std::round(g_aspectRatioOffsetY + Scale(CONTAINER_Y + 0.5f))};
-  ImVec2 descriptionMax = {std::round(g_aspectRatioOffsetX + Scale(CONTAINER_X + 0.5f + CONTAINER_WIDTH)),
-                           std::round(g_aspectRatioOffsetY + Scale(CONTAINER_Y + 0.5f + CONTAINER_HEIGHT))};
-  SetProceduralOrigin(descriptionMin);
-  DrawContainer(descriptionMin, descriptionMax, true);
-
-  char descriptionText[1024];
-  char requiredSpaceText[128];
-  char availableSpaceText[128];
-  snprintf(descriptionText, sizeof(descriptionText), "%s", GetWizardText(g_currentPage).c_str());
-
-  if (g_currentPage == WizardPage::CheckSpace) {
-    constexpr double DivisorGiB = (1024.0 * 1024.0 * 1024.0);
-    double requiredGiB = double(g_installerSources.totalSize) / DivisorGiB;
-    double availableGiB = double(g_installerAvailableSize) / DivisorGiB;
-    snprintf(requiredSpaceText, sizeof(requiredSpaceText),
-             Localise("Installer_Step_RequiredSpace").c_str(), requiredGiB);
-    snprintf(availableSpaceText, sizeof(availableSpaceText),
-             (g_installerAvailableSize > 0) ? Localise("Installer_Step_AvailableSpace").c_str() : "",
-             availableGiB);
-    snprintf(descriptionText, sizeof(descriptionText), "%s%s\n%s",
-             GetWizardText(g_currentPage).c_str(), requiredSpaceText, availableSpaceText);
-  } else if (g_currentPage == WizardPage::InstallFailed) {
-    // Japanese needs text to be brought in by a normal width space
-    // as it allows for text to begin further than others for
-    // special characters.
-    if (Config::Language == ELanguage::Japanese) {
-      strncat(descriptionText, " ", sizeof(descriptionText) - strlen(descriptionText) - 1);
-    }
-
-    strncat(descriptionText, g_installerErrorMessage.c_str(),
-            sizeof(descriptionText) - strlen(descriptionText) - 1);
-  }
-
-  double textAlpha = ComputeMotionInstaller(g_appearTime, g_disappearTime, CONTAINER_INNER_TIME,
-                                            CONTAINER_INNER_DURATION);
-  auto clipRectMin = drawList->GetClipRectMin();
-  auto clipRectMax = drawList->GetClipRectMax();
-
-  float textX = clipRectMin.x + fontSize;
-  float textY = clipRectMin.y - Scale(1.0f);
-
-  auto lineWidth = clipRectMax.x - (fontSize / 2.0f) - clipRectMin.x;
-
-  clipRectMax.x += fontSize;
-  clipRectMax.y += Scale(1.0f);
-
-  float lineMargin = 5.0f;
-
-  if (Config::Language == ELanguage::Japanese) {
-    lineMargin = 5.5f;
-
-    // Removing some padding of the applied due to the inclusion of annotation for Japanese
-    textX -= (fontSize + Scale(1.5f));
-    textY -= Scale(7.0f);
-
-    // The annotation (and thus the Japanese) can be drawn above the edges of the info panel thus the clip needs to be extended a bit
-    clipRectMin.x -= annotationFontSize;
-    clipRectMin.y -= annotationFontSize;
-    clipRectMax.x += annotationFontSize;
-    clipRectMax.y += annotationFontSize;
-
-    textX += annotationFontSize;
-    textY += annotationFontSize;
-
-    lineWidth += annotationFontSize;
-  }
-
-  drawList->PushClipRect(clipRectMin, clipRectMax, false);
-
-  // Text longer than the panel scrolls by itself: it waits at the top, scrolls
-  // down, waits at the bottom and starts over.
-  static WizardPage scrollPage = WizardPage(-1);
-  static ELanguage scrollLanguage = ELanguage::English;
-  static double scrollStart = 0.0;
-  if (scrollPage != g_currentPage || scrollLanguage != Config::Language) {
-    scrollPage = g_currentPage;
-    scrollLanguage = Config::Language;
-    scrollStart = ImGui::GetTime();
-  }
-  float bottomMargin = g_currentPage == WizardPage::InstallSucceeded ? Scale(80) : Scale(6);
-  float paragraphHeight =
-      MeasureCentredParagraph(g_bodyFont, fontSize, lineWidth, lineMargin, descriptionText).y;
-  float overflow = paragraphHeight - (clipRectMax.y - bottomMargin - textY);
-  float scrollY = 0.0f;
-  if (overflow > 0.0f) {
-    constexpr double hold = 2.5;
-    double speed = Scale(30.0f);
-    double travel = overflow / speed;
-    double t = fmod(ImGui::GetTime() - scrollStart, hold + travel + hold);
-    scrollY = t < hold ? 0.0f : t < hold + travel ? float((t - hold) * speed) : overflow;
-    float fade = Scale(24.0f);
-    SetVerticalMarqueeFade(clipRectMin, {clipRectMax.x, clipRectMax.y - bottomMargin + Scale(6)},
-                           scrollY > 0.0f ? fade : 0.001f, scrollY < overflow ? fade : 0.001f);
-  }
-
-  DrawRubyAnnotatedText(
-      g_bodyFont, fontSize, lineWidth, {textX, textY - scrollY}, lineMargin, descriptionText,
-      [=](const char* str, ImVec2 pos) {
-        DrawTextBasic(g_bodyFont, fontSize, pos, IM_COL32(255, 255, 255, int(255 * textAlpha)), str);
-      },
-      [=](const char* str, float size, ImVec2 pos) {
-        DrawTextBasic(g_bodyFont, size, pos, IM_COL32(255, 255, 255, int(255 * textAlpha)), str);
-      },
-      false, Config::Language == ELanguage::Japanese);
-
-  if (overflow > 0.0f) {
-    ResetMarqueeFade();
-  }
-
-  drawList->PopClipRect();
-  drawList->PopClipRect();
-
-  if (g_currentPage == WizardPage::InstallSucceeded) {
-    auto descTextSize = MeasureCentredParagraph(g_bodyFont, fontSize, lineWidth, lineMargin, descriptionText);
-
-    auto colWhite = IM_COL32(255, 255, 255, int(255 * textAlpha));
-
-    auto containerLeft = g_aspectRatioOffsetX + Scale(CONTAINER_X);
-    auto containerTop = g_aspectRatioOffsetY + Scale(CONTAINER_Y);
-    auto containerRight = containerLeft + Scale(CONTAINER_WIDTH);
-    auto containerBottom = containerTop + Scale(CONTAINER_HEIGHT);
-
-    auto marqueeTextSize = g_bodyFont->CalcTextSizeA(fontSize, FLT_MAX, 0, g_creditsStr.c_str());
-    auto marqueeTextMarginY = Scale(15);
-
-    ImVec2 marqueeTextPos = {descriptionMax.x, containerBottom - marqueeTextSize.y - marqueeTextMarginY};
-    ImVec2 marqueeTextMin = {containerLeft, marqueeTextPos.y};
-    ImVec2 marqueeTextMax = {containerRight, containerBottom};
-
-    // The project's logo (UnleashedRecomp: the hedge-dev logo and name).
-    ImVec2 imageRegionMin = {containerLeft, textY + descTextSize.y};
-    ImVec2 imageRegionMax = {containerRight, containerBottom - (marqueeTextMax.y - marqueeTextMin.y)};
-    if (g_projectLogo) {
-      float regionW = imageRegionMax.x - imageRegionMin.x, regionH = imageRegionMax.y - imageRegionMin.y;
-      float logoH = std::min(regionH * 0.9f, regionW * 0.8f * g_projectLogo->height / g_projectLogo->width);
-      float logoW = logoH * g_projectLogo->width / g_projectLogo->height;
-      ImVec2 imageMin = {imageRegionMin.x + (regionW - logoW) / 2, imageRegionMin.y + (regionH - logoH) / 2};
-      drawList->AddImage(TexRef(g_projectLogo), imageMin, {imageMin.x + logoW, imageMin.y + logoH},
-                         {0, 0}, {1, 1}, colWhite);
-    }
-
-    SetHorizontalMarqueeFade(marqueeTextMin, marqueeTextMax, Scale(32));
-    DrawTextWithMarquee(g_bodyFont, fontSize, marqueeTextPos, marqueeTextMin, marqueeTextMax,
-                        colWhite, g_creditsStr.c_str(), g_installerEndTime, 0.9, Scale(200));
-    ResetMarqueeFade();
-  }
-
-  ImVec2 sideMin = {descriptionMax.x, descriptionMin.y};
-  ImVec2 sideMax = {res.x, descriptionMax.y};
-  DrawContainer(sideMin, sideMax, false);
-  drawList->PopClipRect();
-
-  EButtonIcon backIcon;
-  EButtonIcon selectIcon;
-  if (hid::IsInputDeviceController()) {
-    backIcon = EButtonIcon::B;
-    selectIcon = EButtonIcon::A;
-  } else if (hid::g_inputDevice == hid::EInputDevice::Keyboard) {
-    backIcon = EButtonIcon::Escape;
-    selectIcon = EButtonIcon::Enter;
-  } else {
-    backIcon = EButtonIcon::Escape;
-    selectIcon = EButtonIcon::LMB;
-  }
-
-  if (g_currentPage == WizardPage::InstallSucceeded && textAlpha >= 1.0) {
-    ButtonGuide::Open(Button("Common_Select", 115.0f, selectIcon));
-  } else if (g_currentPage != WizardPage::Installing && textAlpha >= 1.0) {
-    const char* backKey = "Common_Back";
-    if ((g_currentPage == g_firstPage) || (g_currentPage == WizardPage::InstallFailed)) {
-      backKey = "Common_Quit";
-    }
-
-    std::array<Button, 2> buttons = {Button("Common_Select", 115.0f, selectIcon),
-                                     Button(backKey, FLT_MAX, backIcon)};
-
-    ButtonGuide::Open(buttons);
-  } else if (g_currentPage == WizardPage::Installing) {
-    ButtonGuide::Open(Button("Common_Cancel", FLT_MAX, backIcon));
-  } else {
-    ButtonGuide::Close();
-  }
-
-  ResetProceduralOrigin();
-}
-
-static void DrawButtonContainer(ImVec2 min, ImVec2 max, int baser, int baseg, float alpha) {
-  // UnleashedRecomp's green buttons in Sonic the Fighters' blue; hovered ones
-  // brighten to cyan.
-  auto drawList = ImGui::GetBackgroundDrawList();
-  SetShaderModifier(IMGUI_SHADER_MODIFIER_SCANLINE_BUTTON);
-  int r = baser / 3, g = 90 + baseg * 2, b = 210 + baser / 2;
-  drawList->AddRectFilledMultiColor(min, max, IM_COL32(r, g, b, int(223 * alpha)),
-                                    IM_COL32(r, g, b, int(178 * alpha)),
-                                    IM_COL32(r, g, b, int(223 * alpha)),
-                                    IM_COL32(r, g, b, int(178 * alpha)));
-  drawList->AddRectFilledMultiColor(min, max, IM_COL32(0, 20, 60, int(13 * alpha)),
-                                    IM_COL32(0, 20, 60, 0), IM_COL32(0, 20, 60, int(55 * alpha)),
-                                    IM_COL32(0, 20, 60, int(6 * alpha)));
-  drawList->AddRectFilledMultiColor(min, max, IM_COL32(r, g + 40, 255, int(13 * alpha)),
-                                    IM_COL32(r, g + 40, 255, int(111 * alpha)),
-                                    IM_COL32(r, g + 40, 255, 0),
-                                    IM_COL32(r, g + 40, 255, int(55 * alpha)));
-  SetShaderModifier(IMGUI_SHADER_MODIFIER_NONE);
-}
-
-static ImVec2 ComputeTextSize(InstallerFont* font, const char* text, float size, float& squashRatio,
-                              float maxTextWidth = FLT_MAX) {
-  ImVec2 textSize = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
-  if (textSize.x > maxTextWidth) {
-    squashRatio = maxTextWidth / textSize.x;
-  } else {
-    squashRatio = 1.0f;
-  }
-
-  return textSize;
-}
-
-static InstallerFont* ButtonFont(const char* text, bool sourceButton) {
-  // The title font only has Latin letters.
-  return (sourceButton || HasWideCharacters(text)) ? g_bodyFont : g_titleFont;
-}
-
-static void DrawButton(ImVec2 min, ImVec2 max, const char* buttonText, bool sourceButton,
-                       bool buttonEnabled, bool& buttonPressed, float maxTextWidth = FLT_MAX,
-                       bool makeDefault = false) {
-  buttonPressed = false;
-
-  float alpha = float(ComputeMotionInstaller(g_appearTime, g_disappearTime, CONTAINER_INNER_TIME,
-                                             CONTAINER_INNER_DURATION));
-  if (!buttonEnabled) {
-    alpha *= 0.5f;
-  }
-
-  int baser = 0;
-  int baseg = 0;
-  if (g_currentMessagePrompt.empty() && !g_currentPickerVisible && !sourceButton && buttonEnabled &&
-      (alpha >= 1.0f)) {
-    bool cursorOnButton = PushCursorRect(min, max, buttonPressed, makeDefault);
-    if (cursorOnButton) {
-      baser = 48;
-      baseg = 32;
-    }
-  }
-
-  DrawButtonContainer(min, max, baser, baseg, alpha);
-
-  InstallerFont* font = ButtonFont(buttonText, sourceButton);
-  float size = Scale(sourceButton ? 16.5f : 20.0f);
-  float squashRatio;
-  ImVec2 textSize = ComputeTextSize(font, buttonText, size, squashRatio, Scale(maxTextWidth));
-  min.x += ((max.x - min.x) - textSize.x) / 2.0f;
-  min.y += ((max.y - min.y) - textSize.y) / 2.0f;
-
-  if (!sourceButton) {
-    // Fixes slight misalignment caused by this particular font.
-    min.y -= Scale(1.0f);
-  }
-
-  SetOrigin({min.x + textSize.x / 2.0f, min.y});
-  SetScale({squashRatio, 1.0f});
-  if (baser) {
-    // Hovered: the game's yellow.
-    SetGradient(min, {min.x + textSize.x, min.y + textSize.y}, IM_COL32(255, 245, 90, 255),
-                IM_COL32(255, 180, 0, 255));
-  } else {
-    SetGradient(min, {min.x + textSize.x, min.y + textSize.y}, IM_COL32(255, 255, 255, 255),
-                IM_COL32(170, 215, 255, 255));
-  }
-
-  DrawTextWithOutline(font, size, min, IM_COL32(255, 255, 255, int(255 * alpha)), buttonText, 4,
-                      IM_COL32(0, 10, 40, int(255 * alpha)));
-
-  ResetGradient();
-  SetScale({1.0f, 1.0f});
-  SetOrigin({0.0f, 0.0f});
-}
-
-enum ButtonColumn { ButtonColumnLeft, ButtonColumnMiddle, ButtonColumnRight };
-
-static void ComputeButtonColumnCoordinates(ButtonColumn buttonColumn, float& minX, float& maxX) {
-  switch (buttonColumn) {
-    case ButtonColumnLeft:
-      minX = g_aspectRatioOffsetX + Scale(CONTAINER_X + CONTAINER_BUTTON_GAP);
-      maxX = g_aspectRatioOffsetX + Scale(CONTAINER_X + CONTAINER_BUTTON_GAP + CONTAINER_BUTTON_WIDTH);
-      break;
-    case ButtonColumnMiddle:
-      minX = g_aspectRatioOffsetX + Scale(CONTAINER_X + CONTAINER_WIDTH / 2.0f - CONTAINER_BUTTON_WIDTH / 2.0f);
-      maxX = g_aspectRatioOffsetX + Scale(CONTAINER_X + CONTAINER_WIDTH / 2.0f + CONTAINER_BUTTON_WIDTH / 2.0f);
-      break;
-    case ButtonColumnRight:
-      minX = g_aspectRatioOffsetX + Scale(CONTAINER_X + CONTAINER_WIDTH - CONTAINER_BUTTON_GAP - CONTAINER_BUTTON_WIDTH);
-      maxX = g_aspectRatioOffsetX + Scale(CONTAINER_X + CONTAINER_WIDTH - CONTAINER_BUTTON_GAP);
-      break;
-  }
-}
-
-static void DrawSourceButton(ButtonColumn buttonColumn, float yRatio, const char* sourceText, bool sourceSet) {
-  bool buttonPressed;
-  float minX, maxX;
-  ComputeButtonColumnCoordinates(buttonColumn, minX, maxX);
-
-  float minusY = (CONTAINER_BUTTON_GAP + BUTTON_HEIGHT) * yRatio;
-  ImVec2 min = {minX, g_aspectRatioOffsetY + Scale(CONTAINER_Y + CONTAINER_HEIGHT - CONTAINER_BUTTON_GAP - BUTTON_HEIGHT - minusY)};
-  ImVec2 max = {maxX, g_aspectRatioOffsetY + Scale(CONTAINER_Y + CONTAINER_HEIGHT - CONTAINER_BUTTON_GAP - minusY)};
-
-  auto alphaMotion = ComputeMotionInstaller(g_appearTime, g_disappearTime, CONTAINER_INNER_TIME,
-                                            CONTAINER_INNER_DURATION);
-  auto lightSize = Scale(14);
-
-  DrawButton(min, max, sourceText, true, sourceSet, buttonPressed,
-             ((max.x - min.x) * 0.7f) / g_aspectRatioScale);
-  DrawToggleLight({min.x + lightSize, min.y + ((max.y - min.y) - lightSize) / 2 + Scale(1)}, sourceSet,
-                  float((sourceSet ? 1.0f : 0.5f) * alphaMotion));
-}
-
-static void DrawProgressBar(float progressRatio) {
-  auto drawList = ImGui::GetBackgroundDrawList();
-  float alpha = 1.0;
-  const uint32_t innerColor0 = IM_COL32(0, 34, 80, int(255 * alpha));
-  const uint32_t innerColor1 = IM_COL32(0, 14, 40, int(255 * alpha));
-  float xPadding = Scale(4);
-  float yPadding = Scale(3);
-  ImVec2 min = {g_aspectRatioOffsetX + Scale(CONTAINER_X) + BOTTOM_X_GAP + Scale(1),
-                g_aspectRatioOffsetY + Scale(CONTAINER_Y + CONTAINER_HEIGHT + BOTTOM_Y_GAP)};
-  ImVec2 max = {g_aspectRatioOffsetX + Scale(CONTAINER_X + CONTAINER_WIDTH - BOTTOM_X_GAP),
-                g_aspectRatioOffsetY + Scale(CONTAINER_Y + CONTAINER_HEIGHT + BOTTOM_Y_GAP + BUTTON_HEIGHT)};
-
-  DrawButtonContainer(min, max, 0, 0, alpha);
-
-  drawList->AddRectFilledMultiColor({min.x + xPadding, min.y + yPadding}, {max.x - xPadding, max.y - yPadding},
-                                    innerColor0, innerColor0, innerColor1, innerColor1);
-
-  const uint32_t sliderColor0 = IM_COL32(70, 215, 255, int(255 * alpha));
-  const uint32_t sliderColor1 = IM_COL32(0, 90, 210, int(255 * alpha));
-  xPadding += Scale(1.5f);
-  yPadding += Scale(1.5f);
-
-  ImVec2 sliderMin = {min.x + xPadding, min.y + yPadding};
-  ImVec2 sliderMax = {max.x - xPadding, max.y - yPadding};
-  sliderMax.x = sliderMin.x + (sliderMax.x - sliderMin.x) * progressRatio;
-  drawList->AddRectFilledMultiColor(sliderMin, sliderMax, sliderColor0, sliderColor0, sliderColor1, sliderColor1);
 }
 
 static void PickerThreadProcess() {
@@ -1078,86 +407,6 @@ static bool ParseSourcePaths(std::list<std::filesystem::path>& paths) {
   return failedPaths.empty();
 }
 
-static void DrawLanguagePicker() {
-  if (g_currentPage == WizardPage::SelectLanguage) {
-    float alphaMotion = float(ComputeMotionInstaller(g_appearTime, g_disappearTime,
-                                                     CONTAINER_INNER_TIME, CONTAINER_INNER_DURATION));
-    float minX, maxX;
-    bool buttonPressed;
-
-    for (int i = 0; i < 6; i++) {
-      ComputeButtonColumnCoordinates((i < 3) ? ButtonColumnLeft : ButtonColumnRight, minX, maxX);
-
-      float minusY = (CONTAINER_BUTTON_GAP + BUTTON_HEIGHT) * (float(i % 3));
-      ImVec2 min = {minX, g_aspectRatioOffsetY + Scale(CONTAINER_Y + CONTAINER_HEIGHT - CONTAINER_BUTTON_GAP - BUTTON_HEIGHT - minusY)};
-      ImVec2 max = {maxX, g_aspectRatioOffsetY + Scale(CONTAINER_Y + CONTAINER_HEIGHT - CONTAINER_BUTTON_GAP - minusY)};
-
-      auto lightSize = Scale(14);
-
-      DrawButton(min, max, LANGUAGE_TEXT[i], false, true, buttonPressed, FLT_MAX,
-                 LANGUAGE_ENUM[i] == ELanguage::English);
-      DrawToggleLight({min.x + lightSize, min.y + ((max.y - min.y) - lightSize) / 2 + Scale(1)},
-                      Config::Language == LANGUAGE_ENUM[i], alphaMotion);
-
-      if (buttonPressed) Config::Language = LANGUAGE_ENUM[i];
-    }
-  }
-}
-
-static void DrawSourcePickers() {
-  bool buttonPressed = false;
-  if (g_currentPage == WizardPage::SelectGame) {
-    constexpr float ADD_BUTTON_MAX_TEXT_WIDTH = 168.0f;
-    const std::string& addFilesText = Localise("Installer_Button_AddFiles");
-    float squashRatio;
-    ImVec2 textSize = ComputeTextSize(ButtonFont(addFilesText.c_str(), false), addFilesText.c_str(),
-                                      20.0f, squashRatio, ADD_BUTTON_MAX_TEXT_WIDTH);
-    ImVec2 min = {g_aspectRatioOffsetX + Scale(CONTAINER_X + BOTTOM_X_GAP),
-                  g_aspectRatioOffsetY + Scale(CONTAINER_Y + CONTAINER_HEIGHT + BOTTOM_Y_GAP)};
-    ImVec2 max = {g_aspectRatioOffsetX + Scale(CONTAINER_X + BOTTOM_X_GAP + textSize.x * squashRatio + BUTTON_TEXT_GAP),
-                  g_aspectRatioOffsetY + Scale(CONTAINER_Y + CONTAINER_HEIGHT + BOTTOM_Y_GAP + BUTTON_HEIGHT)};
-    DrawButton(min, max, addFilesText.c_str(), false, true, buttonPressed, ADD_BUTTON_MAX_TEXT_WIDTH);
-    if (buttonPressed) {
-      PickerShow(false);
-    }
-
-    min.x += Scale(BOTTOM_X_GAP + textSize.x * squashRatio + BUTTON_TEXT_GAP);
-
-    const std::string& addFolderText = Localise("Installer_Button_AddFolder");
-    textSize = ComputeTextSize(ButtonFont(addFolderText.c_str(), false), addFolderText.c_str(), 20.0f,
-                               squashRatio, ADD_BUTTON_MAX_TEXT_WIDTH);
-    max.x = min.x + Scale(textSize.x * squashRatio + BUTTON_TEXT_GAP);
-    DrawButton(min, max, addFolderText.c_str(), false, true, buttonPressed, ADD_BUTTON_MAX_TEXT_WIDTH);
-    if (buttonPressed) {
-      PickerShow(true);
-    }
-  }
-}
-
-static void DrawSources() {
-  if (g_currentPage == WizardPage::SelectGame) {
-    DrawSourceButton(ButtonColumnMiddle, 0, Localise("Installer_Step_Game").c_str(), !g_gameSourcePath.empty());
-  }
-}
-
-static void DrawInstallingProgress() {
-  if (g_currentPage == WizardPage::Installing) {
-    constexpr float ProgressSpeed = 0.1f;
-    float ratioTarget = g_installerProgressRatioTarget.load();
-    g_installerProgressRatioCurrent += std::min(ratioTarget - g_installerProgressRatioCurrent,
-                                                ProgressSpeed * ImGui::GetIO().DeltaTime);
-    DrawProgressBar(g_installerProgressRatioCurrent);
-
-    if (g_installerFinished) {
-      g_installerThread->join();
-      g_installerThread.reset();
-      g_installerEndTime = ImGui::GetTime();
-      g_currentPage = g_installerFailed ? WizardPage::InstallFailed : WizardPage::InstallSucceeded;
-      Game_PlaySound(g_installerFailed ? InstallerSound::Cancel : InstallerSound::Ring);
-    }
-  }
-}
-
 static void InstallerThread() {
   if (!Installer::install(g_installerSources, g_installPath, g_installerJournal, [&]() {
         g_installerProgressRatioTarget = float(double(g_installerJournal.progressCounter) /
@@ -1208,59 +457,533 @@ static bool InstallerParseSources(std::string& errorMessage) {
   return sourcesParsed;
 }
 
-static void DrawNavigationButton() {
+static float UiAlpha() {
+  double time = ImGui::GetTime();
+  double alpha = std::clamp((time - g_appearTime) / APPEAR_DURATION, 0.0, 1.0);
+  if (g_isDisappearing) {
+    alpha *= 1.0 - std::clamp((time - g_disappearTime) / DISAPPEAR_DURATION, 0.0, 1.0);
+  }
+  return float(alpha);
+}
+
+// A point of the 1280x720 layout on the display.
+static ImVec2 LayoutPos(float x, float y) {
+  return {g_aspectRatioOffsetX + Scale(x), g_aspectRatioOffsetY + Scale(y)};
+}
+
+static void DrawBackground() {
+  // The deep blue of the game's menus.
+  auto& res = ImGui::GetIO().DisplaySize;
+  auto drawList = ImGui::GetBackgroundDrawList();
+  drawList->AddRectFilledMultiColor({0.0f, 0.0f}, res, IM_COL32(7, 24, 90, 255),
+                                    IM_COL32(7, 24, 90, 255), IM_COL32(1, 9, 40, 255),
+                                    IM_COL32(1, 9, 40, 255));
+}
+
+static int CharacterIndex() {
+  int index = WIZARD_INSTALL_TEXTURE_INDEX[int(g_currentPage)];
   if (g_currentPage == WizardPage::Installing) {
-    // Navigation buttons are not offered during installation at the moment.
+    // Go through them all while installing.
+    index += int((ImGui::GetTime() - g_installerStartTime) / 15.0);
+  }
+  return index % int(g_installTextures.size());
+}
+
+static void DrawCard() {
+  // The white card of the game's menus, with the page's character standing
+  // on it where the menus have the logo.
+  float alpha = UiAlpha();
+  auto drawList = ImGui::GetBackgroundDrawList();
+  drawList->AddRectFilled(LayoutPos(CARD_X0, CARD_Y0), LayoutPos(CARD_X1, CARD_Y1),
+                          IM_COL32(255, 255, 255, int(255 * alpha)));
+
+  // Cross-fade between characters.
+  static int shown = -1, previous = -1;
+  static double changeTime = 0.0;
+  int index = CharacterIndex();
+  if (index != shown) {
+    previous = shown;
+    shown = index;
+    changeTime = ImGui::GetTime();
+  }
+  float fade = float(std::clamp((ImGui::GetTime() - changeTime) / 0.25, 0.0, 1.0));
+  constexpr float size = CHARACTER_SIZE;
+  float centreX = (CARD_X0 + CARD_X1) / 2;
+  auto draw = [&](int i, float a) {
+    GuestTexture* texture = i >= 0 ? g_installTextures[i] : nullptr;
+    if (!texture || a <= 0.0f) return;
+    drawList->AddImage(TexRef(texture), LayoutPos(centreX - size / 2, CHARACTER_Y),
+                       LayoutPos(centreX + size / 2, CHARACTER_Y + size), {0, 0}, {1, 1},
+                       IM_COL32(255, 255, 255, int(255 * a)));
+  };
+  drawList->PushClipRect(LayoutPos(CARD_X0, CARD_Y0), LayoutPos(CARD_X1, CARD_Y1), true);
+  draw(previous, alpha * (1.0f - fade));
+  draw(shown, alpha * fade);
+  drawList->PopClipRect();
+}
+
+static void DrawBottomBand() {
+  // The line across the bottom of the game's menus and the translucent band
+  // under it, where the button guide is.
+  auto& res = ImGui::GetIO().DisplaySize;
+  auto drawList = ImGui::GetBackgroundDrawList();
+  float u = Scale(1.0f);
+  float y = LayoutPos(0, BAND_Y).y;
+  drawList->AddRectFilled({0.0f, y}, {res.x, y + 2 * u}, IM_COL32(39, 40, 41, 255));
+  drawList->AddRectFilled({0.0f, y + 2 * u}, {res.x, y + 3 * u}, IM_COL32(206, 216, 239, 255));
+  drawList->AddRectFilled({0.0f, y + 3 * u}, {res.x, y + 4 * u}, IM_COL32(157, 169, 195, 255));
+  drawList->AddRectFilled({0.0f, y + 4 * u}, res, IM_COL32(2, 18, 50, 207));
+  drawList->AddRectFilledMultiColor({0.0f, y + 4 * u}, {res.x, y + 13 * u},
+                                    IM_COL32(140, 155, 185, 110), IM_COL32(140, 155, 185, 110),
+                                    IM_COL32(140, 155, 185, 0), IM_COL32(140, 155, 185, 0));
+
+  auto fontSize = Scale(16.0f);
+  auto textSize = g_bodyFont->CalcTextSizeA(fontSize, FLT_MAX, 0, g_versionString);
+  ImVec2 pos = LayoutPos(24.0f, 720.0f - 12.0f);
+  g_bodyFont->AddText(drawList, fontSize, {pos.x, pos.y - textSize.y},
+                      IM_COL32(255, 255, 255, int(80 * UiAlpha())), g_versionString);
+}
+
+enum class RowAction { Language, Next, AddFiles, AddFolder };
+
+struct Row {
+  std::string label;
+  const std::string* description;
+  bool enabled = true;
+  RowAction action;
+  ELanguage language = ELanguage::English;
+};
+
+static bool IsNextEnabled() {
+  if (g_isDisappearing) return false;
+  if (g_currentPage == WizardPage::SelectGame) return !g_gameSourcePath.empty();
+  if (g_currentPage == WizardPage::CheckSpace) {
+    return g_installerAvailableSize == 0 || g_installerAvailableSize > g_installerSources.totalSize;
+  }
+  return true;
+}
+
+static std::vector<Row> PageRows() {
+  std::vector<Row> rows;
+  auto next = [&](const char* label, const char* description) {
+    rows.push_back({Localise(label), &Localise(description), IsNextEnabled(), RowAction::Next});
+  };
+  switch (g_currentPage) {
+    case WizardPage::SelectLanguage:
+      for (size_t i = 0; i < std::size(LANGUAGE_TEXT); ++i) {
+        rows.push_back({LANGUAGE_TEXT[i], &Localise("Installer_Page_SelectLanguage", LANGUAGE_ENUM[i]),
+                        !g_isDisappearing, RowAction::Language, LANGUAGE_ENUM[i]});
+      }
+      break;
+    case WizardPage::Introduction: next("Installer_Button_Next", "Installer_Desc_Next"); break;
+    case WizardPage::SelectGame:
+      rows.push_back({Localise("Installer_Button_AddFiles"), &Localise("Installer_Desc_AddFiles"),
+                      !g_isDisappearing, RowAction::AddFiles});
+      rows.push_back({Localise("Installer_Button_AddFolder"), &Localise("Installer_Desc_AddFolder"),
+                      !g_isDisappearing, RowAction::AddFolder});
+      next("Installer_Button_Next", "Installer_Desc_Next");
+      break;
+    case WizardPage::CheckSpace: next("Installer_Button_Next", "Installer_Desc_Install"); break;
+    case WizardPage::Installing: break;
+    case WizardPage::InstallSucceeded: next("Installer_Button_Next", "Installer_Desc_Play"); break;
+    case WizardPage::InstallFailed: next("Installer_Button_Retry", "Installer_Desc_Retry"); break;
+  }
+  return rows;
+}
+
+static std::string WindowText() {
+  std::string text = g_currentPage == WizardPage::SelectLanguage ? "" : GetWizardText(g_currentPage);
+  if (g_currentPage == WizardPage::CheckSpace) {
+    constexpr double DivisorGiB = (1024.0 * 1024.0 * 1024.0);
+    char requiredSpaceText[128];
+    char availableSpaceText[128] = "";
+    snprintf(requiredSpaceText, sizeof(requiredSpaceText),
+             Localise("Installer_Step_RequiredSpace").c_str(),
+             double(g_installerSources.totalSize) / DivisorGiB);
+    if (g_installerAvailableSize > 0) {
+      snprintf(availableSpaceText, sizeof(availableSpaceText),
+               Localise("Installer_Step_AvailableSpace").c_str(),
+               double(g_installerAvailableSize) / DivisorGiB);
+    }
+    text += std::string(requiredSpaceText) + "\n" + availableSpaceText;
+  } else if (g_currentPage == WizardPage::InstallFailed) {
+    // Japanese needs text to be brought in by a normal width space as it
+    // allows for text to begin further than others for special characters.
+    if (Config::Language == ELanguage::Japanese) text += " ";
+    text += g_installerErrorMessage;
+  }
+  // Blank lines at the end only pad UnleashedRecomp's layout.
+  while (!text.empty() && text.back() == '\n') text.pop_back();
+  return text;
+}
+
+static float LineMargin() {
+  return LINE_HEIGHT - BODY_FONT_SIZE + (Config::Language == ELanguage::Japanese ? 1.0f : 0.0f);
+}
+
+static void DoRowAction(const Row& row) {
+  switch (row.action) {
+    case RowAction::Language:
+      Config::Language = row.language;
+      g_currentPage = WizardPage(int(g_currentPage) + 1);
+      break;
+    case RowAction::AddFiles: PickerShow(false); break;
+    case RowAction::AddFolder: PickerShow(true); break;
+    case RowAction::Next:
+      if (g_currentPage == WizardPage::SelectGame) {
+        std::string sourcesErrorMessage;
+        if (!InstallerParseSources(sourcesErrorMessage)) {
+          // The package isn't the supported one.
+          g_currentMessagePrompt = Localise("Installer_Message_UnsupportedGame");
+          g_currentMessagePromptConfirmation = false;
+          g_gameSourcePath.clear();
+        } else {
+          g_currentPage = WizardPage::CheckSpace;
+        }
+      } else if (g_currentPage == WizardPage::CheckSpace) {
+        InstallerStart();
+      } else if (g_currentPage == WizardPage::InstallSucceeded) {
+        g_isDisappearing = true;
+        g_disappearTime = ImGui::GetTime();
+      } else if (g_currentPage == WizardPage::InstallFailed) {
+        g_currentPage = g_firstPage;
+      } else {
+        g_currentPage = WizardPage(int(g_currentPage) + 1);
+      }
+      break;
+  }
+}
+
+static void UpdateInstallingProgress() {
+  if (g_currentPage != WizardPage::Installing) return;
+  constexpr float ProgressSpeed = 0.1f;
+  float ratioTarget = g_installerProgressRatioTarget.load();
+  g_installerProgressRatioCurrent += std::min(ratioTarget - g_installerProgressRatioCurrent,
+                                              ProgressSpeed * ImGui::GetIO().DeltaTime);
+  if (g_installerFinished) {
+    g_installerThread->join();
+    g_installerThread.reset();
+    g_installerEndTime = ImGui::GetTime();
+    g_currentPage = g_installerFailed ? WizardPage::InstallFailed : WizardPage::InstallSucceeded;
+    Game_PlaySound(g_installerFailed ? InstallerSound::Cancel : InstallerSound::Ring);
+  }
+}
+
+static void DrawProgressBar(ImVec2 min, ImVec2 max, float ratio, float alpha) {
+  // A sunken track filled like the menus' selection bar.
+  auto drawList = ImGui::GetBackgroundDrawList();
+  auto a = [&](float v) { return int(std::clamp(v * alpha, 0.0f, 255.0f)); };
+  float u = Scale(1.0f);
+  drawList->AddRectFilled(min, max, IM_COL32(0, 6, 22, a(200)));
+  drawList->AddRect(min, max, IM_COL32(150, 165, 200, a(150)), 0.0f, 0, u);
+  ImVec2 fillMin = {min.x + 3 * u, min.y + 3 * u};
+  ImVec2 fillMax = {fillMin.x + (max.x - min.x - 6 * u) * std::clamp(ratio, 0.0f, 1.0f), max.y - 3 * u};
+  if (fillMax.x > fillMin.x) {
+    drawList->AddRectFilled(fillMin, fillMax, IM_COL32(2, 125, 198, a(245)));
+    drawList->AddRectFilled(fillMin, {fillMax.x, fillMin.y + 1.5f * u}, IM_COL32(20, 150, 225, a(200)));
+    drawList->AddRectFilled({fillMin.x, fillMax.y - 1.5f * u}, fillMax, IM_COL32(10, 140, 215, a(255)));
+  }
+}
+
+static void DrawLoadingArc(ImVec2 centre, float size, float alpha) {
+  // The game's loading ring, spinning.
+  if (!g_loadingArc) return;
+  float rotation = float(-2 * M_PI * std::fmod(ImGui::GetTime() - g_installerStartTime, 1.0));
+  float c = cosf(rotation), s = sinf(rotation), h = size / 2;
+  auto corner = [&](float x, float y) { return ImVec2(centre.x + x * c - y * s, centre.y + x * s + y * c); };
+  ImGui::GetBackgroundDrawList()->AddImageQuad(TexRef(g_loadingArc), corner(-h, -h), corner(h, -h),
+                                               corner(h, h), corner(-h, h), {0, 0}, {1, 0}, {1, 1},
+                                               {0, 1}, IM_COL32(120, 210, 255, int(220 * alpha)));
+}
+
+// The page's window, like the game's menus (rows) and message windows
+// (text, a line, then the choices). Returns the description of the row under
+// the cursor.
+static const std::string* DrawWindow() {
+  float alpha = UiAlpha();
+  auto drawList = ImGui::GetBackgroundDrawList();
+  std::vector<Row> rows = PageRows();
+  std::string text = WindowText();
+
+  float fontSize = Scale(BODY_FONT_SIZE);
+  float lineMargin = LineMargin();
+  float textWidth = Scale(WINDOW_X1 - WINDOW_X0 - TEXT_MARGIN_X * 2);
+
+  // Height of each part, in layout units.
+  float extraHeight = 0.0f;
+  if (g_currentPage == WizardPage::SelectGame) extraHeight = LINE_HEIGHT + 8.0f;
+  if (g_currentPage == WizardPage::Installing) extraHeight = 44.0f;
+  if (g_currentPage == WizardPage::InstallSucceeded) extraHeight = 128.0f;
+  float rowsHeight = rows.size() * ROW_HEIGHT;
+  float textHeight = text.empty() ? 0.0f
+                                  : MeasureCentredParagraph(g_bodyFont, fontSize, textWidth, lineMargin,
+                                                            text.c_str()).y / g_aspectRatioScale;
+  constexpr float contentTop = WINDOW_Y0 + 84.0f;
+  float bottomPadding = 21.0f;
+  float separatorHeight = (!text.empty() || extraHeight > 0) && !rows.empty() ? 14.0f + 3.0f + 17.0f : 0.0f;
+  float textPadding = text.empty() ? 0.0f : 6.0f;
+  float maxTextHeight = WINDOW_MAX_Y1 - bottomPadding - rowsHeight - separatorHeight - extraHeight -
+                        contentTop - textPadding;
+  float visibleTextHeight = std::min(textHeight, maxTextHeight);
+  float windowY1 = contentTop + textPadding + visibleTextHeight + extraHeight + separatorHeight +
+                   rowsHeight + bottomPadding;
+  if (rows.empty()) windowY1 += 8.0f;
+
+  ImVec2 bodyMin = LayoutPos(WINDOW_X0, WINDOW_Y0);
+  ImVec2 bodyMax = LayoutPos(WINDOW_X1, windowY1);
+  DrawStfPanel(bodyMin, bodyMax, alpha);
+  DrawStfTab(LayoutPos(WINDOW_X0 - 9.0f, WINDOW_Y0 - 9.0f), alpha);
+
+  // Title.
+  auto& title = Localise(g_currentPage == WizardPage::Installing ? "Installer_Header_Installing"
+                                                                 : "Installer_Header_Installer");
+  InstallerFont* titleFont = HasWideCharacters(title.c_str()) ? g_bodyFont : g_titleFont;
+  float titleSize = Scale(TITLE_FONT_SIZE);
+  ImVec2 titleSizePx = titleFont->CalcTextSizeA(titleSize, FLT_MAX, 0, title.c_str());
+  ImVec2 titlePos = {(bodyMin.x + bodyMax.x - titleSizePx.x) / 2, LayoutPos(0, WINDOW_Y0 + 34.0f).y - titleSizePx.y / 2};
+  DrawTextBasic(titleFont, titleSize, {titlePos.x + Scale(1), titlePos.y + Scale(1.5f)},
+                IM_COL32(0, 0, 0, int(90 * alpha)), title.c_str());
+  DrawTextBasic(titleFont, titleSize, titlePos, IM_COL32(255, 255, 255, int(255 * alpha)), title.c_str());
+  if (g_currentPage == WizardPage::Installing) {
+    DrawLoadingArc(LayoutPos(WINDOW_X1 - 44.0f, WINDOW_Y0 + 34.0f), Scale(40.0f), alpha);
+  }
+  DrawStfRule(bodyMin.x, bodyMax.x, LayoutPos(0, WINDOW_Y0 + 66.0f).y, alpha);
+
+  // Text: scrolls by itself when it doesn't fit (waiting at the top and the
+  // bottom).
+  float y = contentTop + textPadding;
+  if (!text.empty()) {
+    static std::string scrollText;
+    static double scrollStart = 0.0;
+    if (scrollText != text) {
+      scrollText = text;
+      scrollStart = ImGui::GetTime();
+    }
+    float overflow = Scale(textHeight - visibleTextHeight);
+    float scrollY = 0.0f;
+    ImVec2 clipMin = {bodyMin.x, LayoutPos(0, y).y - Scale(4)};
+    ImVec2 clipMax = {bodyMax.x, LayoutPos(0, y + visibleTextHeight).y + Scale(2)};
+    if (overflow > 0.0f) {
+      constexpr double hold = 2.5;
+      double speed = Scale(30.0f);
+      double travel = overflow / speed;
+      double t = fmod(ImGui::GetTime() - scrollStart, hold + travel + hold);
+      scrollY = t < hold ? 0.0f : t < hold + travel ? float((t - hold) * speed) : overflow;
+      float fade = Scale(24.0f);
+      SetVerticalMarqueeFade(clipMin, clipMax, scrollY > 0.0f ? fade : 0.001f,
+                             scrollY < overflow ? fade : 0.001f);
+    }
+    drawList->PushClipRect(clipMin, clipMax, true);
+    ImVec2 pos = LayoutPos(WINDOW_X0 + TEXT_MARGIN_X, y);
+    bool japanese = Config::Language == ELanguage::Japanese;
+    if (japanese) pos.y += fontSize * ANNOTATION_FONT_SIZE_MODIFIER * 0.8f;
+    DrawRubyAnnotatedText(
+        g_bodyFont, fontSize, textWidth, {pos.x, pos.y - scrollY}, lineMargin, text.c_str(),
+        [=](const char* str, ImVec2 p) {
+          DrawTextBasic(g_bodyFont, fontSize, p, IM_COL32(255, 255, 255, int(255 * alpha)), str);
+        },
+        [=](const char* str, float size, ImVec2 p) {
+          DrawTextBasic(g_bodyFont, size, p, IM_COL32(255, 255, 255, int(255 * alpha)), str);
+        },
+        false, japanese);
+    drawList->PopClipRect();
+    if (overflow > 0.0f) ResetMarqueeFade();
+    y += visibleTextHeight;
+  }
+
+  // Page extras.
+  if (g_currentPage == WizardPage::SelectGame) {
+    // The game's source, with a light that comes on once it's added.
+    y += 8.0f;
+    auto& label = Localise("Installer_Step_Game");
+    ImVec2 lightPos = LayoutPos(WINDOW_X0 + TEXT_MARGIN_X, y + (LINE_HEIGHT - 14.0f) / 2);
+    DrawToggleLight(lightPos, !g_gameSourcePath.empty(), alpha);
+    DrawTextBasic(g_bodyFont, fontSize, LayoutPos(WINDOW_X0 + TEXT_MARGIN_X + 26.0f, y + (LINE_HEIGHT - BODY_FONT_SIZE) / 2),
+                  IM_COL32(255, 255, 255, int(255 * alpha)), label.c_str());
+    if (!g_gameSourcePath.empty()) {
+      std::u8string name = g_gameSourcePath.filename().u8string();
+      std::string file = Truncate(std::string(name.begin(), name.end()), 28, true, true);
+      auto size = g_bodyFont->CalcTextSizeA(fontSize, FLT_MAX, 0, file.c_str());
+      ImVec2 pos = LayoutPos(WINDOW_X1 - TEXT_MARGIN_X, y + (LINE_HEIGHT - BODY_FONT_SIZE) / 2);
+      DrawTextBasic(g_bodyFont, fontSize, {pos.x - size.x, pos.y}, IM_COL32(150, 215, 255, int(255 * alpha)), file.c_str());
+    }
+    y += LINE_HEIGHT;
+  } else if (g_currentPage == WizardPage::Installing) {
+    y += 12.0f;
+    DrawProgressBar(LayoutPos(WINDOW_X0 + TEXT_MARGIN_X, y), LayoutPos(WINDOW_X1 - TEXT_MARGIN_X, y + 24.0f),
+                    g_installerProgressRatioCurrent, alpha);
+    y += 32.0f;
+  } else if (g_currentPage == WizardPage::InstallSucceeded) {
+    // The project's logo (UnleashedRecomp: the hedge-dev logo and name) and
+    // the credits going by.
+    y += 6.0f;
+    if (g_projectLogo) {
+      float logoH = 80.0f, logoW = logoH * g_projectLogo->width / g_projectLogo->height;
+      float centreX = (WINDOW_X0 + WINDOW_X1) / 2;
+      drawList->AddImage(TexRef(g_projectLogo), LayoutPos(centreX - logoW / 2, y),
+                         LayoutPos(centreX + logoW / 2, y + logoH), {0, 0}, {1, 1},
+                         IM_COL32(255, 255, 255, int(255 * alpha)));
+    }
+    y += 86.0f;
+    ImVec2 marqueeMin = LayoutPos(WINDOW_X0 + 12.0f, y);
+    ImVec2 marqueeMax = LayoutPos(WINDOW_X1 - 12.0f, y + LINE_HEIGHT);
+    SetHorizontalMarqueeFade(marqueeMin, marqueeMax, Scale(32));
+    DrawTextWithMarquee(g_bodyFont, fontSize, {marqueeMax.x, marqueeMin.y + Scale(LINE_HEIGHT - BODY_FONT_SIZE) / 2},
+                        marqueeMin, marqueeMax, IM_COL32(255, 255, 255, int(255 * alpha)),
+                        g_creditsStr.c_str(), g_installerEndTime, 0.9, Scale(200));
+    ResetMarqueeFade();
+    y += LINE_HEIGHT;
+  }
+
+  // The choices.
+  if (separatorHeight > 0.0f) {
+    y += 14.0f;
+    DrawStfRule(bodyMin.x, bodyMax.x, LayoutPos(0, y).y, alpha);
+    y += 3.0f + 17.0f;
+  } else if (!rows.empty() && text.empty()) {
+    y += 1.0f;
+  }
+
+  bool interactive = g_currentMessagePrompt.empty() && !g_currentPickerVisible && alpha >= 1.0f &&
+                     !g_isDisappearing;
+  static WizardPage cursorPage = WizardPage(-1);
+  if (cursorPage != g_currentPage) {
+    cursorPage = g_currentPage;
+    g_currentCursorIndex = -1;
+  }
+
+  const std::string* description = nullptr;
+  const Row* pressedRow = nullptr;
+  int cursorIndex = 0;
+  bool firstEnabled = true;
+  for (size_t i = 0; i < rows.size(); ++i) {
+    const Row& row = rows[i];
+    ImVec2 min = {bodyMin.x + Scale(1), LayoutPos(0, y + i * ROW_HEIGHT).y};
+    ImVec2 max = {bodyMax.x - Scale(1), LayoutPos(0, y + (i + 1) * ROW_HEIGHT).y};
+    if (i % 2 == 0) {
+      drawList->AddRectFilled(min, max, IM_COL32(0, 51, 125, int(64 * alpha)));
+    }
+    bool selected = false;
+    if (row.enabled && interactive) {
+      bool pressed = false;
+      bool makeDefault = firstEnabled;
+      firstEnabled = false;
+      if (makeDefault && g_currentCursorIndex < 0) {
+        // The game's menus always show a selection.
+        g_currentCursorIndex = cursorIndex;
+      }
+      selected = PushCursorRect(min, max, pressed, makeDefault);
+      ++cursorIndex;
+      if (pressed) pressedRow = &row;
+    }
+    if (selected) {
+      DrawSelectionContainer(min, max, alpha);
+      description = row.description;
+    }
+    auto size = g_bodyFont->CalcTextSizeA(fontSize, FLT_MAX, 0, row.label.c_str());
+    ImU32 colour = row.enabled ? IM_COL32(255, 255, 255, int(255 * alpha)) : IM_COL32(120, 130, 150, int(255 * alpha));
+    DrawTextBasic(g_bodyFont, fontSize, {(min.x + max.x - size.x) / 2, (min.y + max.y - size.y) / 2},
+                  colour, row.label.c_str());
+  }
+
+  if (!description) {
+    if (g_currentPage == WizardPage::Installing) {
+      description = &Localise("Installer_Desc_Installing");
+    } else if (g_currentPage == WizardPage::SelectLanguage) {
+      description = &Localise("Installer_Page_SelectLanguage");
+    } else if (!rows.empty()) {
+      description = rows.back().description;
+    }
+  }
+
+  if (pressedRow) {
+    DoRowAction(*pressedRow);
+  }
+  return description;
+}
+
+static void DrawDescriptionPanel(const std::string* description) {
+  // The panel along the bottom of the game's menus that describes the
+  // selected choice.
+  float alpha = UiAlpha();
+  auto drawList = ImGui::GetBackgroundDrawList();
+  ImVec2 min = LayoutPos(DESCRIPTION_X0, DESCRIPTION_Y0);
+  ImVec2 max = LayoutPos(DESCRIPTION_X1, DESCRIPTION_Y1);
+  DrawStfPanel(min, max, alpha);
+  if (!description || description->empty()) return;
+
+  float fontSize = Scale(BODY_FONT_SIZE);
+  float lineMargin = LineMargin();
+  ImVec2 textMin = LayoutPos(DESCRIPTION_X0 + 55.0f, DESCRIPTION_Y0 + 21.0f);
+  ImVec2 clipMax = LayoutPos(DESCRIPTION_X1 - 30.0f, DESCRIPTION_Y1 - 12.0f);
+  float width = clipMax.x - textMin.x;
+  bool japanese = Config::Language == ELanguage::Japanese;
+  float height = MeasureCentredParagraph(g_bodyFont, fontSize, width, lineMargin, description->c_str()).y;
+
+  static const std::string* scrollDescription = nullptr;
+  static double scrollStart = 0.0;
+  if (scrollDescription != description) {
+    scrollDescription = description;
+    scrollStart = ImGui::GetTime();
+  }
+  ImVec2 clipMin = {textMin.x - Scale(8), textMin.y - Scale(12)};
+  float overflow = height - (clipMax.y - textMin.y);
+  float scrollY = 0.0f;
+  if (overflow > 0.0f) {
+    constexpr double hold = 2.5;
+    double speed = Scale(30.0f);
+    double travel = overflow / speed;
+    double t = fmod(ImGui::GetTime() - scrollStart, hold + travel + hold);
+    scrollY = t < hold ? 0.0f : t < hold + travel ? float((t - hold) * speed) : overflow;
+    float fade = Scale(18.0f);
+    SetVerticalMarqueeFade(clipMin, clipMax, scrollY > 0.0f ? fade : 0.001f, scrollY < overflow ? fade : 0.001f);
+  }
+  drawList->PushClipRect(clipMin, clipMax, true);
+  ImVec2 pos = {textMin.x, textMin.y - scrollY};
+  if (japanese) pos.y += fontSize * ANNOTATION_FONT_SIZE_MODIFIER * 0.5f;
+  DrawRubyAnnotatedText(
+      g_bodyFont, fontSize, width, pos, lineMargin, description->c_str(),
+      [=](const char* str, ImVec2 p) {
+        DrawTextBasic(g_bodyFont, fontSize, p, IM_COL32(255, 255, 255, int(255 * alpha)), str);
+      },
+      [=](const char* str, float size, ImVec2 p) {
+        DrawTextBasic(g_bodyFont, size, p, IM_COL32(255, 255, 255, int(255 * alpha)), str);
+      },
+      false, japanese);
+  drawList->PopClipRect();
+  if (overflow > 0.0f) ResetMarqueeFade();
+}
+
+static void OpenButtonGuide() {
+  EButtonIcon backIcon;
+  EButtonIcon selectIcon;
+  if (hid::IsInputDeviceController()) {
+    backIcon = EButtonIcon::B;
+    selectIcon = EButtonIcon::A;
+  } else if (hid::g_inputDevice == hid::EInputDevice::Keyboard) {
+    backIcon = EButtonIcon::Escape;
+    selectIcon = EButtonIcon::Enter;
+  } else {
+    backIcon = EButtonIcon::Escape;
+    selectIcon = EButtonIcon::LMB;
+  }
+
+  if (UiAlpha() < 1.0f || !g_currentMessagePrompt.empty()) {
+    if (g_currentMessagePrompt.empty()) ButtonGuide::Close();
     return;
   }
-
-  bool nextButtonEnabled = !g_isDisappearing && (g_currentPage != WizardPage::Installing);
-  if (nextButtonEnabled && g_currentPage == WizardPage::SelectGame) {
-    nextButtonEnabled = !g_gameSourcePath.empty();
-  }
-  if (nextButtonEnabled && g_currentPage == WizardPage::CheckSpace) {
-    nextButtonEnabled = g_installerAvailableSize == 0 || g_installerAvailableSize > g_installerSources.totalSize;
-  }
-
-  float squashRatio;
-  constexpr float NAV_BUTTON_MAX_TEXT_WIDTH = 90.0f;
-  std::string_view nextButtonKey = "Installer_Button_Next";
-  if (g_currentPage == WizardPage::InstallFailed) {
-    nextButtonKey = "Installer_Button_Retry";
-  }
-
-  const std::string& nextButtonText = Localise(nextButtonKey);
-  ImVec2 nextTextSize = ComputeTextSize(ButtonFont(nextButtonText.c_str(), true), nextButtonText.c_str(),
-                                        20.0f, squashRatio, NAV_BUTTON_MAX_TEXT_WIDTH);
-  ImVec2 min = {g_aspectRatioOffsetX + Scale(CONTAINER_X + CONTAINER_WIDTH - nextTextSize.x * squashRatio - BOTTOM_X_GAP - BUTTON_TEXT_GAP),
-                g_aspectRatioOffsetY + Scale(CONTAINER_Y + CONTAINER_HEIGHT + BOTTOM_Y_GAP)};
-  ImVec2 max = {g_aspectRatioOffsetX + Scale(CONTAINER_X + CONTAINER_WIDTH - BOTTOM_X_GAP),
-                g_aspectRatioOffsetY + Scale(CONTAINER_Y + CONTAINER_HEIGHT + BOTTOM_Y_GAP + BUTTON_HEIGHT)};
-
-  bool buttonPressed = false;
-  DrawButton(min, max, nextButtonText.c_str(), false, nextButtonEnabled, buttonPressed, NAV_BUTTON_MAX_TEXT_WIDTH);
-
-  if (buttonPressed) {
-    if (g_currentPage == WizardPage::SelectGame) {
-      std::string sourcesErrorMessage;
-      if (!InstallerParseSources(sourcesErrorMessage)) {
-        // The package isn't the supported one.
-        g_currentMessagePrompt = Localise("Installer_Message_UnsupportedGame");
-        g_currentMessagePromptConfirmation = false;
-        g_gameSourcePath.clear();
-      } else {
-        g_currentPage = WizardPage::CheckSpace;
-      }
-    } else if (g_currentPage == WizardPage::CheckSpace) {
-      InstallerStart();
-    } else if (g_currentPage == WizardPage::InstallSucceeded) {
-      g_isDisappearing = true;
-      g_disappearTime = ImGui::GetTime();
-    } else if (g_currentPage == WizardPage::InstallFailed) {
-      g_currentPage = g_firstPage;
-    } else {
-      g_currentPage = WizardPage(int(g_currentPage) + 1);
+  if (g_currentPage == WizardPage::InstallSucceeded) {
+    ButtonGuide::Open(Button("Common_Select", FLT_MAX, selectIcon));
+  } else if (g_currentPage == WizardPage::Installing) {
+    ButtonGuide::Open(Button("Common_Cancel", FLT_MAX, backIcon));
+  } else {
+    const char* backKey = "Common_Back";
+    if ((g_currentPage == g_firstPage) || (g_currentPage == WizardPage::InstallFailed)) {
+      backKey = "Common_Quit";
     }
+    std::array<Button, 2> buttons = {Button("Common_Select", FLT_MAX, selectIcon),
+                                     Button(backKey, FLT_MAX, backIcon)};
+    ButtonGuide::Open(buttons);
   }
 }
 
@@ -1299,50 +1022,6 @@ static void CheckCancelAction() {
     // Just go back to the previous page.
     g_currentPage = WizardPage(int(g_currentPage) - 1);
   }
-}
-
-static void DrawHorizontalBorder(bool bottomBorder) {
-  const uint32_t FADE_COLOR_LEFT = IM_COL32(155, 175, 215, 0);
-  const uint32_t SOLID_COLOR = IM_COL32(170, 205, 255, 255);
-  const uint32_t FADE_COLOR_RIGHT = IM_COL32(170, 225, 255, 0);
-  auto drawList = ImGui::GetBackgroundDrawList();
-  double borderScale = 1.0 - ComputeMotionInstaller(g_appearTime, g_disappearTime, CONTAINER_LINE_ANIMATION_TIME,
-                                                    CONTAINER_LINE_ANIMATION_DURATION);
-  float midX = g_aspectRatioOffsetX + Scale(CONTAINER_X + CONTAINER_WIDTH / 5);
-  float minX = std::lerp(g_aspectRatioOffsetX + Scale(CONTAINER_X - BORDER_SIZE - BORDER_OVERSHOOT), midX, float(borderScale));
-  float maxX = std::lerp(g_aspectRatioOffsetX + Scale(CONTAINER_X + CONTAINER_WIDTH + SIDE_CONTAINER_WIDTH + BORDER_OVERSHOOT),
-                         midX, float(borderScale));
-  float minY = g_aspectRatioOffsetY + (bottomBorder ? Scale(CONTAINER_Y + CONTAINER_HEIGHT) : Scale(CONTAINER_Y - BORDER_SIZE));
-  float maxY = minY + Scale(BORDER_SIZE);
-  drawList->AddRectFilledMultiColor({minX, minY}, {midX, maxY}, FADE_COLOR_LEFT, SOLID_COLOR, SOLID_COLOR,
-                                    FADE_COLOR_LEFT);
-
-  drawList->AddRectFilledMultiColor({midX, minY}, {maxX, maxY}, SOLID_COLOR, FADE_COLOR_RIGHT, FADE_COLOR_RIGHT,
-                                    SOLID_COLOR);
-}
-
-static void DrawVerticalBorder(bool rightBorder) {
-  const uint32_t SOLID_COLOR = IM_COL32(170, rightBorder ? 225 : 205, 255, 255);
-  const uint32_t FADE_COLOR = IM_COL32(170, rightBorder ? 225 : 205, 255, 0);
-  auto drawList = ImGui::GetBackgroundDrawList();
-  double borderScale = 1.0 - ComputeMotionInstaller(g_appearTime, g_disappearTime, CONTAINER_LINE_ANIMATION_TIME,
-                                                    CONTAINER_LINE_ANIMATION_DURATION);
-  float minX = g_aspectRatioOffsetX + (rightBorder ? Scale(CONTAINER_X + CONTAINER_WIDTH) : Scale(CONTAINER_X - BORDER_SIZE));
-  float maxX = minX + Scale(BORDER_SIZE);
-  float midY = g_aspectRatioOffsetY + Scale(CONTAINER_Y + CONTAINER_HEIGHT / 2);
-  float minY = std::lerp(g_aspectRatioOffsetY + Scale(CONTAINER_Y - BORDER_OVERSHOOT), midY, float(borderScale));
-  float maxY = std::lerp(g_aspectRatioOffsetY + Scale(CONTAINER_Y + CONTAINER_HEIGHT + BORDER_OVERSHOOT), midY,
-                         float(borderScale));
-  drawList->AddRectFilledMultiColor({minX, minY}, {maxX, midY}, FADE_COLOR, FADE_COLOR, SOLID_COLOR, SOLID_COLOR);
-
-  drawList->AddRectFilledMultiColor({minX, midY}, {maxX, maxY}, SOLID_COLOR, SOLID_COLOR, FADE_COLOR, FADE_COLOR);
-}
-
-static void DrawBorders() {
-  DrawHorizontalBorder(false);
-  DrawHorizontalBorder(true);
-  DrawVerticalBorder(false);
-  DrawVerticalBorder(true);
 }
 
 static void DrawMessagePrompt() {
@@ -1419,6 +1098,8 @@ static void PickerCheckResults() {
 
   if (!g_currentPickerResults.empty() && ParseSourcePaths(g_currentPickerResults)) {
     g_pickerTutorialCleared[g_pickerTutorialFolderMode] = true;
+    // With the game added, go on to Next (after Add Files and Add Folder).
+    if (!g_gameSourcePath.empty()) g_currentCursorIndex = 2;
   }
 
   g_currentPickerResultsReady = false;
@@ -1442,9 +1123,7 @@ bool InstallerWizard::Init(rex::ui::ImmediateDrawer& drawer, std::filesystem::pa
   for (size_t i = 0; i < g_installTextures.size(); ++i) {
     g_installTextures[i] = InstallerAssets::Texture("character_" + std::to_string(i));
   }
-  g_sonicIcon = InstallerAssets::Texture("sonic_icon");
   g_loadingArc = InstallerAssets::Texture("loading_arc");
-  g_ringGlow = InstallerAssets::Texture("ring_glow");
   g_projectLogo = InstallerAssets::Texture("project_logo");
 
   g_creditsStr = Localise("Credits");
@@ -1480,18 +1159,15 @@ void InstallerWizard::Draw() {
   }
 
   ProcessMusic();
+  UpdateInstallingProgress();
   ResetCursorRects();
   DrawBackground();
-  DrawLeftImage();
-  DrawScanlineBars();
-  DrawDescriptionContainer();
-  DrawLanguagePicker();
-  DrawSourcePickers();
-  DrawSources();
-  DrawInstallingProgress();
-  DrawNavigationButton();
+  DrawCard();
+  DrawBottomBand();
+  // Like the game, a message window takes the place of the page's window.
+  DrawDescriptionPanel(MessageWindow::s_isVisible ? nullptr : DrawWindow());
+  OpenButtonGuide();
   CheckCancelAction();
-  DrawBorders();
   DrawMessagePrompt();
   PickerDrawForeground();
   PickerCheckTutorial();
@@ -1500,10 +1176,10 @@ void InstallerWizard::Draw() {
   ButtonGuide::Draw();
 
   if (g_isDisappearing) {
-    double disappearDuration = ALL_ANIMATIONS_FULL_DURATION / 60.0;
+    double disappearDuration = DISAPPEAR_DURATION;
     if (g_isQuitting) {
       // Add some extra waiting time when quitting the application altogether.
-      disappearDuration += QUITTING_EXTRA_DURATION / 60.0;
+      disappearDuration += QUITTING_EXTRA_DURATION;
     }
 
     if (ImGui::GetTime() > (g_disappearTime + disappearDuration)) {

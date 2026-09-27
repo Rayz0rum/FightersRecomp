@@ -3,8 +3,9 @@
 # break. Japanese furigana: [漢字:かんじ].
 # The build also takes the glyphs the fonts need from this file.
 
+# The names in the language list (for their glyphs).
 [Languages]
-en=FRANÇAIS DEUTSCH ENGLISH ESPAÑOL ITALIANO 日本語
+en=English 日本語 Deutsch Français Español Italiano
 
 [Installer_Header_Installer]
 en=INSTALLER
@@ -31,12 +32,12 @@ es=Selecciona un idioma.
 it=Seleziona una lingua.
 
 [Installer_Page_Introduction]
-en=Welcome to\nSonic the Fighters Recompiled!\n\nYou'll need the Xbox 360 copy of\nSonic the Fighters (World) in order to proceed with the installation.
+en=Welcome to Sonic the Fighters Recompiled!\n\nYou'll need the Xbox 360 copy of Sonic the Fighters (World) in order to proceed with the installation.
 ja=Sonic the Fighters Recompiledへようこそ！\nインストールには\nXbox 360[用:よう]「SONIC THE FIGHTERS」\n（ワールド[版:ばん]）が[必要:ひつよう]です
-de=Willkommen zu\nSonic the Fighters Recompiled!\nEs wird eine Xbox 360 Kopie von Sonic the Fighters (World) benötigt um mit der Installation fortfahren zu können.
-fr=Bienvenue sur\nSonic the Fighters Recompiled !\n\nVous aurez besoin d'une copie de Sonic the Fighters (World) pour Xbox\n360 pour procéder à l'installation.
-es=¡Bienvenido a\nSonic the Fighters Recompiled!\n\nNecesitas una copia de\nSonic the Fighters (World)\nde Xbox 360 para continuar\ncon la instalación.
-it=Benvenuto a\nSonic the Fighters Recompiled!\n\nDovrai avere una copia di\nSonic the Fighters (World)\nper la Xbox 360 per proseguire\ncon l'installazione.
+de=Willkommen zu Sonic the Fighters Recompiled!\n\nEs wird eine Xbox 360 Kopie von Sonic the Fighters (World) benötigt um mit der Installation fortfahren zu können.
+fr=Bienvenue sur Sonic the Fighters Recompiled !\n\nVous aurez besoin d'une copie de Sonic the Fighters (World) pour Xbox 360 pour procéder à l'installation.
+es=¡Bienvenido a Sonic the Fighters Recompiled!\n\nNecesitas una copia de Sonic the Fighters (World) de Xbox 360 para continuar con la instalación.
+it=Benvenuto a Sonic the Fighters Recompiled!\n\nDovrai avere una copia di Sonic the Fighters (World) per la Xbox 360 per proseguire con l'installazione.
 
 [Installer_Page_SelectGame]
 en=Add the source for the game.
@@ -48,9 +49,9 @@ it=Aggiungi la fonte per il gioco.
 
 [Installer_Page_CheckSpace]
 en=The content will be installed to the program's folder.\n\n
-ja=コンテンツはプログラムのフォルダに\nインストールされます\n
-de=Der Inhalt wird in dem Ordner des Programms installiert.\n
-fr=Le contenu sera installé dans le même dossier que le programme.\n
+ja=コンテンツはプログラムのフォルダに\nインストールされます\n\n
+de=Der Inhalt wird in dem Ordner des Programms installiert.\n\n
+fr=Le contenu sera installé dans le même dossier que le programme.\n\n
 es=El contenido será instalado a la carpeta del programa.\n\n
 it=Il contenuto verrà installato nella cartella di questo programma.\n\n
 
@@ -66,7 +67,7 @@ it=Attendi mentre il contenuto viene installato...
 en=Installation complete!\nThis project is brought to you by:
 ja=インストール[完了:かんりょう]！\nプロジェクト[制作:せいさく]：
 de=Installation abgeschlossen!\nDieses Projekt wird präsentiert von:
-fr=Installation terminée !\nCe projet vous est présenté\npar :
+fr=Installation terminée !\nCe projet vous est présenté par :
 es=¡Instalación completada!\nEste proyecto ha sido posible gracias a:
 it=Installazione completata!\nQuesto progetto è stato creato da:
 
@@ -79,60 +80,60 @@ es=La instalación falló.\n\nError:
 it=Installazione fallita.\n\nErrore:
 
 [Installer_Step_Game]
-en=GAME
+en=Game
 ja=ゲーム
-de=SPIEL
-fr=JEU
-es=JUEGO
-it=GIOCO
+de=Spiel
+fr=Jeu
+es=Juego
+it=Gioco
 
 [Installer_Step_RequiredSpace]
 en=Required space: %2.2f GiB
 ja=[必要:ひつよう]な[容量:ようりょう]: %2.2f GiB
-de=Benötigter Speicherplatz:\n%2.2f GiB
-fr=Espace nécessaire :\n%2.2f Gio
+de=Benötigter Speicherplatz: %2.2f GiB
+fr=Espace nécessaire : %2.2f Gio
 es=Espacio necesario: %2.2f GiB
 it=Spazio necessario: %2.2f GiB
 
 [Installer_Step_AvailableSpace]
 en=Available space: %2.2f GiB
 ja=[使用:しよう][可能:かのう]な[容量:ようりょう]: %2.2f GiB
-de=Verfügbarer Speicherplatz:\n%2.2f GiB
-fr=Espace disponible :\n%2.2f Gio
+de=Verfügbarer Speicherplatz: %2.2f GiB
+fr=Espace disponible : %2.2f Gio
 es=Espacio disponible: %2.2f GiB
 it=Spazio disponibile: %2.2f GiB
 
 [Installer_Button_Next]
-en=NEXT
+en=Next
 ja=次へ
-de=WEITER
-fr=SUIVANT
-es=SIGUIENTE
-it=CONTINUA
+de=Weiter
+fr=Suivant
+es=Siguiente
+it=Continua
 
 [Installer_Button_Retry]
-en=RETRY
+en=Retry
 ja=リトライ
-de=ERNEUT VERSUCHEN
-fr=RÉESSAYER
-es=REINTENTAR
-it=RIPROVA
+de=Erneut versuchen
+fr=Réessayer
+es=Reintentar
+it=Riprova
 
 [Installer_Button_AddFiles]
-en=ADD FILES
+en=Add Files
 ja=ファイルを追加
-de=DATEIEN HINZUFÜGEN
-fr=AJOUTER DES FICHIERS
-es=AÑADIR ARCHIVOS
-it=AGGIUNGI FILE
+de=Dateien hinzufügen
+fr=Ajouter des fichiers
+es=Añadir archivos
+it=Aggiungi file
 
 [Installer_Button_AddFolder]
-en=ADD FOLDER
+en=Add Folder
 ja=フォルダを追加
-de=ORDNER HINZUFÜGEN
-fr=AJOUTER UN DOSSIER
-es=AÑADIR CARPETA
-it=AGGIUNGI CARTELLA
+de=Ordner hinzufügen
+fr=Ajouter un dossier
+es=Añadir carpeta
+it=Aggiungi cartella
 
 [Installer_Message_InvalidFilesList]
 en=The following selected files are invalid:
@@ -143,43 +144,43 @@ es=Los siguientes archivos no son válidos:
 it=I seguenti file non sono validi:
 
 [Installer_Message_InvalidFiles]
-en=Some of the files that have\nbeen provided are not valid.\n\nPlease make sure all the\nspecified files are correct\nand try again.
+en=Some of the files that have been provided are not valid.\n\nPlease make sure all the specified files are correct and try again.
 ja=[提供:ていきょう]されたファイルの[一部:いちぶ]が[有効:ゆうこう]ではありません\n[指定:してい]されたファイルがすべて[正:ただ]しいことを[確認:かくにん]して\nもう[一度:いちど]お[試:ため]しください
-de=Einige Dateien, die bereitgestellt\nwurden sind ungültig.\n\nBitte stelle sicher, dass\ndie angegebenen Dateien korrekt\nsind und versuche es erneut.
-fr=Certains fichiers fournis ne\nsont pas valides.\n\nVeuillez vous assurer que tous\nles fichiers spécifiés sont\ncorrects et réessayez.
-es=Algunos de los archivos\nseleccionados no son válidos.\n\nPor favor, asegúrate de que\ntodos los archivos son correctos\ne inténtalo de nuevo.
-it=Alcuni dei file che sono stati\nselezionati non sono validi.\n\nAssicurati che tutti\ni file sono quelli corretti\ne riprova.
+de=Einige Dateien, die bereitgestellt wurden sind ungültig.\n\nBitte stelle sicher, dass die angegebenen Dateien korrekt sind und versuche es erneut.
+fr=Certains fichiers fournis ne sont pas valides.\n\nVeuillez vous assurer que tous les fichiers spécifiés sont corrects et réessayez.
+es=Algunos de los archivos seleccionados no son válidos.\n\nPor favor, asegúrate de que todos los archivos son correctos e inténtalo de nuevo.
+it=Alcuni dei file che sono stati selezionati non sono validi.\n\nAssicurati che tutti i file sono quelli corretti e riprova.
 
 [Installer_Message_FilePickerTutorial]
-en=Select the Sonic the Fighters\n(World) Xbox 360 package.\n\nThis file can be obtained from\nyour Xbox 360 hard drive, in\nContent\\0000000000000000\\5841129E\\000D0000.\n\nFor choosing a folder that contains\nit, use the "Add Folder" option\ninstead.
+en=Select the Sonic the Fighters (World) Xbox 360 package.\n\nThis file can be obtained from your Xbox 360 hard drive, in Content\\0000000000000000\\5841129E\\000D0000.\n\nFor choosing a folder that contains it, use the "Add Folder" option instead.
 ja=Xbox 360[用:よう]「SONIC THE FIGHTERS」\n（ワールド[版:ばん]）のパッケージを[選択:せんたく]してください\n\nこのファイルはXbox 360ハードドライブの\nContent\\0000000000000000\\5841129E\\000D0000\nから[取得:しゅとく]できます\n\nこれを[含:ふく]むフォルダを[選択:せんたく]するには\n[代:か]わりに「フォルダを[追加:ついか]」を[使用:しよう]してください
-de=Wähle das Xbox 360 Paket von\nSonic the Fighters (World).\n\nDie Datei kann über die Festplatte\ndeiner Xbox 360 erlangt werden, in\nContent\\0000000000000000\\5841129E\\000D0000.\n\nUm einen Ordner auszuwählen, der sie\nenthält, benutze die "Ordner\nHinzufügen" Option stattdessen.
-fr=Sélectionnez le paquet Xbox 360\nde Sonic the Fighters (World).\n\nCe fichier peut être obtenu à partir\ndu disque dur de votre Xbox 360, dans\nContent\\0000000000000000\\5841129E\\000D0000.\n\nPour choisir un dossier qui le\ncontient, utilisez plutôt l'option\n"Ajouter un dossier".
-es=Selecciona el paquete de Xbox 360\nde Sonic the Fighters (World).\n\nPuedes obtener el archivo de\ntu disco duro de Xbox 360, en\nContent\\0000000000000000\\5841129E\\000D0000.\n\nPara elegir una carpeta que lo\ncontenga, utiliza la opción\n"Añadir Carpeta".
-it=Seleziona il pacchetto Xbox 360\ndi Sonic the Fighters (World).\n\nQuesto file può essere ottenuto\ndall'hard drive della tua Xbox 360, in\nContent\\0000000000000000\\5841129E\\000D0000.\n\nPer selezionare una cartella che lo\ncontiene usa l'opzione\n"Aggiungi cartella".
+de=Wähle das Xbox 360 Paket von Sonic the Fighters (World).\n\nDie Datei kann über die Festplatte deiner Xbox 360 erlangt werden, in Content\\0000000000000000\\5841129E\\000D0000.\n\nUm einen Ordner auszuwählen, der sie enthält, benutze die "Ordner hinzufügen" Option stattdessen.
+fr=Sélectionnez le paquet Xbox 360 de Sonic the Fighters (World).\n\nCe fichier peut être obtenu à partir du disque dur de votre Xbox 360, dans Content\\0000000000000000\\5841129E\\000D0000.\n\nPour choisir un dossier qui le contient, utilisez plutôt l'option "Ajouter un dossier".
+es=Selecciona el paquete de Xbox 360 de Sonic the Fighters (World).\n\nPuedes obtener el archivo de tu disco duro de Xbox 360, en Content\\0000000000000000\\5841129E\\000D0000.\n\nPara elegir una carpeta que lo contenga, utiliza la opción "Añadir carpeta".
+it=Seleziona il pacchetto Xbox 360 di Sonic the Fighters (World).\n\nQuesto file può essere ottenuto dall'hard drive della tua Xbox 360, in Content\\0000000000000000\\5841129E\\000D0000.\n\nPer selezionare una cartella che lo contiene usa l'opzione "Aggiungi cartella".
 
 [Installer_Message_FolderPickerTutorial]
-en=Select a folder that contains the\nSonic the Fighters (World)\nXbox 360 package, such as its\n5841129E folder.\n\nFor choosing the package itself,\nuse the "Add Files" option instead.
+en=Select a folder that contains the Sonic the Fighters (World) Xbox 360 package, such as its 5841129E folder.\n\nFor choosing the package itself, use the "Add Files" option instead.
 ja=Xbox 360[用:よう]「SONIC THE FIGHTERS」\n（ワールド[版:ばん]）のパッケージを[含:ふく]む\nフォルダ（5841129Eなど）を[選択:せんたく]してください\n\nパッケージを[選択:せんたく]するには\n[代:か]わりに「ファイルを[追加:ついか]」を[使用:しよう]してください
-de=Wähle einen Ordner, der das Xbox 360\nPaket von Sonic the Fighters (World)\nenthält, zum Beispiel den Ordner\n5841129E.\n\nUm das Paket selbst auszuwählen,\nbenutze die "Dateien Hinzufügen"\nOption stattdessen.
-fr=Sélectionnez un dossier contenant\nle paquet Xbox 360 de Sonic the\nFighters (World), comme son\ndossier 5841129E.\n\nPour choisir le paquet lui-même,\nutilisez plutôt l'option\n"Ajouter des fichiers".
-es=Selecciona una carpeta que\ncontenga el paquete de Xbox 360\nde Sonic the Fighters (World),\ncomo su carpeta 5841129E.\n\nPara elegir el paquete en sí,\nutiliza la opción "Añadir Archivos".
-it=Seleziona una cartella che contiene\nil pacchetto Xbox 360 di Sonic the\nFighters (World), come la sua\ncartella 5841129E.\n\nPer selezionare il pacchetto stesso\nusa l'opzione "Aggiungi file".
+de=Wähle einen Ordner, der das Xbox 360 Paket von Sonic the Fighters (World) enthält, zum Beispiel den Ordner 5841129E.\n\nUm das Paket selbst auszuwählen, benutze die "Dateien hinzufügen" Option stattdessen.
+fr=Sélectionnez un dossier contenant le paquet Xbox 360 de Sonic the Fighters (World), comme son dossier 5841129E.\n\nPour choisir le paquet lui-même, utilisez plutôt l'option "Ajouter des fichiers".
+es=Selecciona una carpeta que contenga el paquete de Xbox 360 de Sonic the Fighters (World), como su carpeta 5841129E.\n\nPara elegir el paquete en sí, utiliza la opción "Añadir archivos".
+it=Seleziona una cartella che contiene il pacchetto Xbox 360 di Sonic the Fighters (World), come la sua cartella 5841129E.\n\nPer selezionare il pacchetto stesso usa l'opzione "Aggiungi file".
 
 [Installer_Message_UnsupportedGame]
-en=This isn't the supported copy of\nSonic the Fighters.\n\nOnly the World release of the\nXbox 360 game is supported.
+en=This isn't the supported copy of Sonic the Fighters.\n\nOnly the World release of the Xbox 360 game is supported.
 ja=これは[対応:たいおう]している\n「SONIC THE FIGHTERS」ではありません\n\n[対応:たいおう]しているのはXbox 360[用:よう]の\nワールド[版:ばん]のみです
-de=Dies ist nicht die unterstützte\nKopie von Sonic the Fighters.\n\nNur die World-Version des\nXbox 360 Spiels wird unterstützt.
-fr=Ce n'est pas la copie prise en\ncharge de Sonic the Fighters.\n\nSeule la version World du jeu\nXbox 360 est prise en charge.
-es=Esta no es la copia compatible\nde Sonic the Fighters.\n\nSolo la versión World del\njuego de Xbox 360 es compatible.
-it=Questa non è la copia supportata\ndi Sonic the Fighters.\n\nÈ supportata solo la versione\nWorld del gioco per Xbox 360.
+de=Dies ist nicht die unterstützte Kopie von Sonic the Fighters.\n\nNur die World-Version des Xbox 360 Spiels wird unterstützt.
+fr=Ce n'est pas la copie prise en charge de Sonic the Fighters.\n\nSeule la version World du jeu Xbox 360 est prise en charge.
+es=Esta no es la copia compatible de Sonic the Fighters.\n\nSolo la versión World del juego de Xbox 360 es compatible.
+it=Questa non è la copia supportata di Sonic the Fighters.\n\nÈ supportata solo la versione World del gioco per Xbox 360.
 
 [Installer_Message_Quit]
 en=Are you sure you want to quit?
 ja=[終了:しゅうりょう]してもよろしいですか？
 de=Installation verlassen?
 fr=Êtes-vous sûr de vouloir quitter ?
-es=¿Estás seguro de que quieres\nsalir?
+es=¿Estás seguro de que quieres salir?
 it=Sicuro di voler uscire?
 
 [Installer_Message_Cancel]
@@ -245,6 +246,70 @@ de=Abbrechen
 fr=Annuler
 es=Cancelar
 it=Annulla
+
+[Installer_Desc_Next]
+en=Go on to the next step.
+ja=次のステップに進みます。
+de=Weiter zum nächsten Schritt.
+fr=Passer à l'étape suivante.
+es=Pasa al siguiente paso.
+it=Passa al passaggio successivo.
+
+[Installer_Desc_AddFiles]
+en=Select the game's package file.
+ja=ゲームのパッケージファイルを選択します。
+de=Die Paketdatei des Spiels auswählen.
+fr=Choisir le fichier de paquet du jeu.
+es=Selecciona el archivo de paquete del juego.
+it=Seleziona il file del pacchetto del gioco.
+
+[Installer_Desc_AddFolder]
+en=Select a folder that contains the game's package.
+ja=ゲームのパッケージがあるフォルダを選択します。
+de=Einen Ordner mit dem Paket des Spiels auswählen.
+fr=Choisir un dossier contenant le paquet du jeu.
+es=Selecciona una carpeta que contenga el paquete del juego.
+it=Seleziona una cartella che contiene il pacchetto del gioco.
+
+[Installer_Desc_Install]
+en=Start the installation.
+ja=インストールを開始します。
+de=Die Installation starten.
+fr=Lancer l'installation.
+es=Inicia la instalación.
+it=Avvia l'installazione.
+
+[Installer_Desc_Installing]
+en=Installing the game. Please wait.
+ja=ゲームをインストールしています。しばらくお待ちください。
+de=Das Spiel wird installiert. Bitte warten.
+fr=Installation du jeu. Veuillez patienter.
+es=Instalando el juego. Espera, por favor.
+it=Installazione del gioco in corso. Attendi.
+
+[Installer_Desc_Play]
+en=Start Sonic the Fighters.
+ja=ソニック・ザ・ファイターズを始めます。
+de=Sonic the Fighters starten.
+fr=Lancer Sonic the Fighters.
+es=Inicia Sonic the Fighters.
+it=Avvia Sonic the Fighters.
+
+[Installer_Desc_Retry]
+en=Go back to the start and try again.
+ja=最初に戻ってやり直します。
+de=Zum Anfang zurückkehren und es erneut versuchen.
+fr=Revenir au début et réessayer.
+es=Vuelve al principio e inténtalo de nuevo.
+it=Torna all'inizio e riprova.
+
+[Common_OK]
+en=OK
+ja=OK
+de=OK
+fr=OK
+es=Aceptar
+it=OK
 
 [Credits]
 en=SparkosTheWolf, rayan, ReXGlue SDK, hedge-dev (installer design, UnleashedRecomp), M2, SEGA
